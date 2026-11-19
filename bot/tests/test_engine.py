@@ -134,20 +134,32 @@ class FakeRest:
             {"name": name, "overwrites": overwrites or [], "topic": topic}
         )
         cid = 555000000000000001
+        row = {"id": str(cid), "type": 0, "name": name,
+               "permission_overwrites": list(overwrites or [])}
         self.channel_rows.append({"id": str(cid), "type": 0, "name": name})
-        self.channel_rows_by_id[cid] = {"id": str(cid), "name": name}
+        self.channel_rows_by_id[cid] = row
         return {"id": str(cid), "name": name}
 
     def put_overwrite(self, channel_id, target_id, kind, allow, deny, reason=None):
         self.overwrites[(channel_id, target_id)] = (kind, allow, deny)
+        row = self.channel_rows_by_id.get(channel_id)
+        if row is not None:
+            rows = [o for o in row["permission_overwrites"] if int(o["id"]) != target_id]
+            rows.append({"id": str(target_id), "type": kind,
+                         "allow": allow, "deny": deny})
+            row["permission_overwrites"] = rows
         return 204
 
     def delete_overwrite(self, channel_id, target_id, reason=None):
+        """Mirrors Discord: answers 200 even when nothing was there."""
         self.overwrite_deletes.append((channel_id, target_id))
-        if self.status not in (200, 204):
-            return self.status
         self.overwrites.pop((channel_id, target_id), None)
-        return self.status
+        row = self.channel_rows_by_id.get(channel_id)
+        if row is not None:
+            row["permission_overwrites"] = [
+                o for o in row["permission_overwrites"] if int(o["id"]) != target_id
+            ]
+        return 200
 
     # -- roles ------------------------------------------------------------
     def request(self, method, route, body=None, **kw):
@@ -441,6 +453,9 @@ class OpsChannelTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.engine, self.rest = build_engine(self.tmp.name)
+        self.rest.role_rows.append(
+            {"id": str(GUILD_ID), "name": "@everyone", "permissions": "0", "position": 0}
+        )
         self.cid = self.engine.ensure_ops()
 
     def tearDown(self):
@@ -513,14 +528,49 @@ class OpsChannelTests(unittest.TestCase):
         })
         self.assertEqual(self.rest.role_removed, [])
 
-    def test_failed_revocation_escalates_to_a_kick(self):
-        self.rest.status = 403
+    def test_admin_intruder_is_not_reported_as_removed(self):
+        """Deleting an overwrite answers 200 even when nothing was there.
+
+        An intruder who holds Administrator can still read the channel after the
+        delete, so the notice must say so instead of claiming success.
+        """
+        self.rest.role_rows.append(
+            {"id": "8888", "name": "THE KING", "permissions": str(1 << 3), "position": 17}
+        )
+        self.rest.members[424242] = {"roles": ["8888"]}
         self.engine.on_message({
             "id": "8", "channel_id": str(self.cid), "content": "hi",
             "author": {"id": "424242", "username": "snoop", "bot": False},
+            "member": {"roles": ["8888"]},
+        })
+        notice = [s for s in self.rest.sent if "Unauthorised access" in s["content"]][0]
+        self.assertIn("FAILED", notice["content"])
+        self.assertIn(424242, self.rest.kicks)
+
+    def test_plain_intruder_is_removed_without_a_kick(self):
+        self.engine.on_message({
+            "id": "9", "channel_id": str(self.cid), "content": "hi",
+            "author": {"id": "424242", "username": "snoop", "bot": False},
             "member": {"roles": []},
         })
-        self.assertIn(424242, self.rest.kicks)
+        notice = [s for s in self.rest.sent if "Unauthorised access" in s["content"]][0]
+        self.assertIn("**Access revoked** yes", notice["content"])
+        self.assertEqual(self.rest.kicks, [])
+
+    def test_can_view_denies_a_plain_member(self):
+        self.rest.members[424242] = {"roles": []}
+        self.assertFalse(self.engine.ops.can_view(424242))
+
+    def test_can_view_allows_the_gate_role(self):
+        self.rest.members[424242] = {"roles": [str(self.engine.ops.role_id)]}
+        self.assertTrue(self.engine.ops.can_view(424242))
+
+    def test_can_view_short_circuits_on_administrator(self):
+        self.rest.role_rows.append(
+            {"id": "8888", "name": "Admin", "permissions": str(1 << 3), "position": 5}
+        )
+        self.rest.members[424242] = {"roles": ["8888"]}
+        self.assertTrue(self.engine.ops.can_view(424242))
 
     def test_sensitive_codes_route_to_the_private_channel(self):
         self.engine.on_message(message(LYNX_ID, "code 10", message_id=42))

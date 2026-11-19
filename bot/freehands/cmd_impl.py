@@ -272,7 +272,12 @@ def ops(engine, command, user_id, message_id, channel_id, roles):
         lines = [f"**Ops channel audit** {engine.ops.describe()}", ""]
         lines.append(f"**Allowed** owner, Arceus, Lynx, me")
         if a.missing:
-            lines.append(f"**Missing the gate role** {', '.join(f'<@{u}>' for u in a.missing)}")
+            lines.append(
+                f"**Cannot view the channel** {', '.join(f'<@{u}>' for u in a.missing)}"
+                " - run `+ops lock` to re-grant the gate role"
+            )
+        else:
+            lines.append("**All three operators can view it.**")
         lines.append("")
         lines.append(
             "**Note** Discord's Administrator permission ignores channel "

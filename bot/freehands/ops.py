@@ -32,6 +32,7 @@ from .log import log, stats
 from .rest import Rest, RestError
 
 VIEW_CHANNEL = 1 << 10
+ADMINISTRATOR = 1 << 3
 SEND_MESSAGES = 1 << 11
 READ_MESSAGE_HISTORY = 1 << 16
 ATTACH_FILES = 1 << 15
@@ -55,8 +56,7 @@ class Intrusion:
 class Audit:
     """Who can actually see the channel, and who only *thinks* they cannot."""
     allowed: list[int]
-    admins: list[int]      # hold Administrator: overwrites cannot hide anything
-    missing: list[int]     # on the allow-list but not granted access yet
+    missing: list[int]     # on the allow-list but cannot actually view
 
 
 class OpsChannel:
@@ -178,35 +178,53 @@ class OpsChannel:
     def allows(self, user_id: int) -> bool:
         return user_id in ALLOWED_OPS or user_id == BOT_ID
 
-    def audit(self) -> Audit:
-        """Report who can really see the channel.
+    def can_view(self, user_id: int, held: set[int] | None = None) -> bool:
+        """Resolve whether a member can really view this channel.
 
-        Discord's Administrator permission bypasses channel overwrites, so an
-        admin who is not an operator can read this channel no matter what the
-        overwrites say. There is no API to hide a channel from an admin; the
-        only fix is to take that role away from them.
+        Discord's own resolution: union the base permissions, short-circuit on
+        Administrator, then apply the @everyone overwrite, the member's role
+        overwrites and finally any member overwrite. Without this the bot would
+        have to trust a DELETE that succeeds even when nothing was there.
         """
         try:
-            roles = self.rest.request("GET", f"/guilds/{GUILD_ID}/roles") or []
+            roles = {int(r["id"]): r for r in
+                     self.rest.request("GET", f"/guilds/{GUILD_ID}/roles") or []}
         except RestError as exc:
-            log.warning("ops audit could not read roles: %s", exc)
-            return Audit([], [], [])
-
-        admin_roles = {int(r["id"]) for r in roles if int(r["permissions"]) & (1 << 3)}
-        admins: list[int] = []
-        # Members cannot be enumerated without the GUILD_MEMBERS intent, so the
-        # known roles of the operators are all that can be checked directly.
-        for user_id in sorted(ALLOWED_OPS):
+            log.warning("permission check could not read roles: %s", exc)
+            return True  # fail closed: assume they can see it
+        if held is None:
             member = self.rest.member(GUILD_ID, user_id) or {}
             held = {int(r) for r in member.get("roles", [])}
-            if held & admin_roles:
-                admins.append(user_id)
-        missing = []
-        for user_id in sorted(ALLOWED_OPS):
-            member = self.rest.member(GUILD_ID, user_id) or {}
-            if self.role_id and self.role_id not in {int(r) for r in member.get("roles", [])}:
-                missing.append(user_id)
-        return Audit(sorted(ALLOWED_OPS), admins, missing)
+
+        base = int(roles.get(GUILD_ID, {}).get("permissions", 0))
+        for role_id in held:
+            if role_id in roles:
+                base |= int(roles[role_id]["permissions"])
+        if base & ADMINISTRATOR:
+            return True
+
+        rows = self.rest.channel(self.channel_id) or {}
+        overwrites = {int(o["id"]): o for o in rows.get("permission_overwrites", [])}
+        everyone = overwrites.get(GUILD_ID)
+        if everyone:
+            base = (base & ~int(everyone["deny"])) | int(everyone["allow"])
+        for role_id in held:
+            row = overwrites.get(role_id)
+            if row and row.get("type") == TYPE_ROLE:
+                base = (base & ~int(row["deny"])) | int(row["allow"])
+        member_row = overwrites.get(user_id)
+        if member_row and member_row.get("type") == TYPE_MEMBER:
+            base = (base & ~int(member_row["deny"])) | int(member_row["allow"])
+        return bool(base & VIEW_CHANNEL)
+
+    def audit(self) -> Audit:
+        """Report which operators can actually view the channel.
+
+        Members cannot be enumerated without the GUILD_MEMBERS intent, so this
+        checks the allow-list rather than the whole guild.
+        """
+        missing = [u for u in sorted(ALLOWED_OPS) if not self.can_view(u)]
+        return Audit(sorted(ALLOWED_OPS), missing)
 
     def evict(self, user_id: int, purge: bool = True) -> Intrusion:
         """Remove a non-operator's access and clear what they posted.
@@ -215,11 +233,11 @@ class OpsChannel:
         failure here is reported rather than swallowed: the caller can then
         escalate to a kick.
         """
-        # A member overwrite may not exist (access is role-gated), so removal is
-        # best-effort; what matters is that they are not an operator.
+        # Discord answers 200 to a DELETE even when no overwrite existed, so the
+        # status proves nothing. Check whether they can still view the channel.
         status = self.rest.delete_overwrite(self.channel_id, user_id,
                                             reason="not an operator")
-        removed = status in (200, 204)
+        removed = not self.can_view(user_id)
         purged = 0
         if purge:
             purged = self._purge_from(user_id)
