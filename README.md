@@ -29,6 +29,11 @@ with no access role, so nobody can be handed in. Everyone else is denied, and
 anyone who does post there is purged and reported. See
 [the Administrator caveat](docs/ARCHITECTURE.md#the-private-operator-channel).
 
+**Bankrupt.** `+bankrupt @user` strips every role, DMs the member to tell them,
+and remembers what it took so `+bankrupt recover @user` can hand it back. Any
+tier may bankrupt; only moderators and owners can recover. The owner, Lynx and
+Arceus cannot be bankrupted by anyone.
+
 **Temporary ownership.** Lynx can lend someone operator authority for ten
 minutes with `+Temp Ownership @user`. The deadline is stored, so it expires even
 across a restart. Only Lynx can run it.
@@ -97,6 +102,8 @@ Prefix is `+`. See [docs/COMMANDS.md](docs/COMMANDS.md) for every command and
 +ops [create|lock|audit]  the private operator channel
 +dyllan on|off            arm or disarm the watch
 +Temp Ownership @user     lend ownership for 10 minutes (Lynx only)
++bankrupt @user           strip every role and notify them (any tier)
++bankrupt recover @user   give the roles back (moderator or owner)
 +antiban on|off          ban protection
 +keepbanned add|remove   anti-ban exceptions
 +mute <user> [10m]       timeout

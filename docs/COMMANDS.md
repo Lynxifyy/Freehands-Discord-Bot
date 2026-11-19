@@ -96,6 +96,32 @@ Codes need no prefix. Say the number, or the phrase.
 | 19 | Radio silence | high | owner, Arceus | yes | private |
 | 20 | Server compromised | critical | owner, Arceus | no | private |
 
+### Bankrupt
+
+`+bankrupt @user` strips every role the bot is allowed to remove, then DMs the
+member to tell them their roles are gone and how to get them back. Any tier can
+run it. `+bankrupt recover @user` puts back exactly what was taken - moderators
+and owners only.
+
+It is designed to be reversible, so the guards matter:
+
+- the bot never strips `@Eternal`, the guild's floor role; removing it would take
+  the member out of the server rather than demote them
+- `@Owner`, Lynx and Arceus are **protected targets** - no one can bankrupt them,
+  at any tier. Taking `Owner👑` would leave the server unadministrable, and the
+  bot cannot grant that role back because it sits above the bot
+- you cannot bankrupt yourself or the bot
+- a plain member cannot bankrupt staff; only an owner-tier caller can
+- only roles that were actually removed are recorded, so a recovery never claims
+  to have restored something it did not
+
+The record is written to `state.json` immediately, so a recovery still works
+after a restart. A bankruptcy that removed nothing is not recorded at all.
+
+Recovery needs the role to still exist and still be below the bot. If a role was
+deleted or moved above the bot in the meantime, the reply lists it as failed
+rather than silently skipping it.
+
 ### Temporary ownership
 
 `+Temp Ownership @user` gives that member operator authority for ten minutes.

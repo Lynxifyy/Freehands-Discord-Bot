@@ -8,6 +8,7 @@ incident turns into a mess.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from .config import (
@@ -106,6 +107,67 @@ class Moderator:
             else:
                 skipped.append(f"{self.role_name(role_id)} (failed)")
         return removed, skipped
+
+    # -- bankruptcy -------------------------------------------------------
+    def bankrupt(self, user_id: int, actor_id: int) -> tuple[list[str], list[str], list[int]]:
+        """Strip every manageable role and remember what was taken.
+
+        Returns (removed, kept, stored_ids). `kept` is what the bot could not
+        touch - a role above it, or an integration-managed role - and those are
+        deliberately not stored, so a recovery never invents a role the member
+        did not have.
+        """
+        member = self.rest.member(GUILD_ID, user_id)
+        if not member:
+            return [], ["member not found"], []
+        taken: list[int] = []
+        removed: list[str] = []
+        kept: list[str] = []
+        for raw in member.get("roles", []):
+            role_id = int(raw)
+            if role_id == ROLE_ETERNAL:
+                kept.append(self.role_name(role_id))
+                continue
+            if not self.manageable(role_id):
+                kept.append(f"{self.role_name(role_id)} (above bot)")
+                continue
+            if self.rest.remove_role(GUILD_ID, user_id, role_id, "bankrupt") in (200, 204):
+                removed.append(self.role_name(role_id))
+                taken.append(role_id)
+            else:
+                kept.append(f"{self.role_name(role_id)} (failed)")
+
+        # An empty record would make a later recovery claim it restored
+        # something, so only remember a strip that actually took a role.
+        if taken:
+            self.store.bankrupt[str(user_id)] = {
+                "roles": taken,
+                "by": actor_id,
+                "at": time.time(),
+                "names": removed,
+            }
+            self.store.touch()
+            self.store.save(force=True)
+        return removed, kept, taken
+
+    def unbankrupt(self, user_id: int) -> tuple[list[str], list[str]]:
+        """Give back exactly the roles the last bankruptcy took."""
+        record = self.store.bankrupt.pop(str(user_id), None)
+        if not record:
+            return [], ["no bankruptcy on record"]
+        added: list[str] = []
+        failed: list[str] = []
+        for role_id in record.get("roles", []):
+            if not self.manageable(role_id):
+                failed.append(f"{self.role_name(role_id)} (above bot)")
+                continue
+            if self.rest.add_role(GUILD_ID, user_id, role_id, "bankruptcy recovery") in (200, 204):
+                added.append(self.role_name(role_id))
+            else:
+                failed.append(self.role_name(role_id))
+        self.store.touch()
+        self.store.save(force=True)
+        return added, failed
 
     # -- anti-ban ---------------------------------------------------------
     def ban_list(self) -> dict[int, str]:

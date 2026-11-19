@@ -8,18 +8,23 @@ makes the permission table in `register()` the single place to audit.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 from . import text
 from .commands import Spec, user_id_from
 from .tempown import DEFAULT_MINUTES
 from .config import (
+    ARCEUS_ID,
+    BOT_ID,
     GUILD_ID,
     LYNX_ID,
+    OWNER_ID,
     MAIN_CHAT_ID,
     ROLE_CO_OWNER,
     ROLE_ETERNAL,
     WATCH_ID,
 )
+from .engine import TIER_ORDER
 from .log import stats
 
 
@@ -65,6 +70,9 @@ def register(engine) -> None:
     add(Spec("unmute", _bind(engine, unmute), "mod", "+unmute <user>", "clear timeout"))
     add(Spec("nomute", _bind(engine, nomute), "owner", "+nomute on|off", "freeze all mutes"))
     add(Spec("takeall", _bind(engine, takeall), "owner", "+takeall <user>", "strip every role"))
+    add(Spec("bankrupt", _bind(engine, bankrupt), "user", "+bankrupt <user>",
+             "strip every role and notify them",
+             aliases=("bankruptrecover",)))
     add(Spec("recover", _bind(engine, recover), "owner", "+recover", "grant co-owner"))
     add(Spec("snapshot", _bind(engine, snapshot), "owner", "+snapshot <user>", "save roles"))
     add(Spec("restore", _bind(engine, restore), "owner", "+restore <user>", "restore saved roles"))
@@ -605,4 +613,95 @@ def tempownership_status(engine, command, user_id, message_id, channel_id, roles
         channel_id, message_id,
         f"<@{grant.user_id}> holds temporary ownership, "
         f"{grant.seconds_left // 60}m {grant.seconds_left % 60}s left.",
+    )
+
+# Roles that a bankruptcy must never take, whoever asks. The owner keeps the
+# guild; taking Owner👑 would leave the server unadministrable and no recovery
+# path exists, because the bot cannot grant a role above itself.
+PROTECTED = (OWNER_ID, LYNX_ID, ARCEUS_ID)
+
+
+def bankrupt(engine, command, user_id, message_id, channel_id, roles):
+    """`+bankrupt @user` - strip every role the bot can take, then tell them.
+
+    Any tier may run it, which is why the target list is guarded: without this
+    a moderator could bankrupt the owner and there would be no way back.
+    """
+    if command.args and command.args[0].lower() in ("recover", "restore", "undo"):
+        return bankrupt_recover(
+            engine, replace(command, args=command.args[1:]),
+            user_id, message_id, channel_id, roles,
+        )
+
+    target = engine.target(command)
+    if not target:
+        engine.reply(channel_id, message_id,
+                     "Who? `+bankrupt @user`  |  `+bankrupt recover @user`")
+        return
+    if target in PROTECTED:
+        engine.reply(channel_id, message_id,
+                     f"<@{target}> is a protected operator and cannot be bankrupted.")
+        return
+    if target == user_id:
+        engine.reply(channel_id, message_id, "You cannot bankrupt yourself.")
+        return
+    if target == BOT_ID:
+        engine.reply(channel_id, message_id, "I am not going to bankrupt myself.")
+        return
+
+    # Every tier may run this, so a member must not be able to strip staff.
+    # A plain member may bankrupt another plain member; only an owner-tier
+    # caller may touch a moderator.
+    actor_tier = engine.tier_of(user_id, roles)
+    target_tier = engine.tier_of(target, engine.roles_for(target, {}))
+    if target_tier != "user" and TIER_ORDER[actor_tier] > TIER_ORDER["owner"]:
+        engine.reply(channel_id, message_id,
+                     f"<@{target}> is staff - only an owner can bankrupt them.")
+        return
+
+    removed, kept, taken = engine.mod.bankrupt(target, actor_id=user_id)
+    if not removed and not taken:
+        engine.reply(channel_id, message_id,
+                     f"<@{target}> had no roles I am allowed to remove."
+                     + (f" Kept: {', '.join(kept)}" if kept else ""))
+        return
+
+    delivered = engine.rest.dm(
+        target,
+        "**Your roles in ᴇᴛᴇʀɴᴀʟ have been removed.**\n"
+        "A Freehands moderator can give them back with `+bankrupt recover @you`.\n"
+        f"Removed: {', '.join(removed)}",
+    )
+    engine.reply(
+        channel_id, message_id,
+        f"**Bankrupt:** <@{target}>\n"
+        f"Removed: {', '.join(removed) if removed else 'none'}\n"
+        f"Kept: {', '.join(kept) if kept else 'none'}\n"
+        f"Notified: {'yes, by DM' if delivered else 'no - their DMs are closed'}\n"
+        f"Undo with `+bankrupt recover @user`.",
+    )
+
+
+def bankrupt_recover(engine, command, user_id, message_id, channel_id, roles):
+    """`+bankrupt recover @user` - moderator or owner only.
+
+    The recovery must be at least as privileged as the bankruptcy, otherwise
+    anyone could undo a moderator's action.
+    """
+    if TIER_ORDER[engine.tier_of(user_id, roles)] > TIER_ORDER["mod"]:
+        engine.reply(channel_id, message_id,
+                     "Only a moderator or the owner can recover roles.")
+        return
+    target = engine.target(command)
+    if not target:
+        engine.reply(channel_id, message_id, "Who? `+bankrupt recover @user`")
+        return
+    if not engine.store.bankrupt.get(str(target)):
+        engine.reply(channel_id, message_id, f"No bankruptcy on record for <@{target}>.")
+        return
+    added, failed = engine.mod.unbankrupt(target)
+    engine.reply(
+        channel_id, message_id,
+        f"**Recovered** <@{target}>: {', '.join(added) if added else 'nothing restored'}"
+        + (f"\nFailed: {', '.join(failed)}" if failed else ""),
     )
