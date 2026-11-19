@@ -44,6 +44,11 @@ SLUR_EXEMPT = frozenset({OWNER_ID, LYNX_ID, ARCEUS_ID, BUM_ID})
 
 PREFIX = "+"
 
+# Channels the bot reads and acts in. Hydrating blank gateway content costs one
+# REST read per message, so it is scoped to these rather than every channel.
+# Override with FH_CHANNELS="123,456".
+TRACKED_CHANNELS = frozenset({MAIN_CHAT_ID})
+
 # Intents. GUILDS | GUILD_MODERATION | GUILD_MESSAGES are non-privileged.
 # GUILD_MEMBERS and MESSAGE_CONTENT are privileged: the app must have them
 # enabled in the developer portal, otherwise Identify closes with 4014 and

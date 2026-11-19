@@ -6,6 +6,7 @@ poll fallback, so behaviour cannot diverge between transports.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -23,6 +24,7 @@ from .config import (
     OWNER_ID,
     PREFIX,
     SLUR_EXEMPT,
+    TRACKED_CHANNELS,
     WATCH_ID,
 )
 from .log import log, stats
@@ -31,6 +33,14 @@ from .rest import Rest, RestError
 from .store import Store
 
 TIER_ORDER = {"owner": 0, "admin": 1, "mod": 2, "user": 3}
+
+
+def _tracked_channels() -> set[int]:
+    raw = os.environ.get("FH_CHANNELS", "").strip()
+    if not raw:
+        return set(TRACKED_CHANNELS)
+    parsed = {int(part) for part in raw.replace(" ", "").split(",") if part.isdigit()}
+    return parsed or set(TRACKED_CHANNELS)
 
 
 class Engine:
@@ -45,6 +55,7 @@ class Engine:
         self.raid = text.RaidTracker(self.settings.raid_joins, self.settings.raid_window)
         self._cooldowns: dict[tuple[int, str], float] = {}
         self._member_roles: dict[int, set[int]] = {}
+        self.channels = _tracked_channels()
         from . import cmd_impl  # local import keeps the registry wiring in one place
 
         cmd_impl.register(self)
@@ -81,6 +92,8 @@ class Engine:
         content = msg.get("content") or ""
         message_id = int(msg["id"])
         channel_id = int(msg["channel_id"])
+        if channel_id not in self.channels:
+            return
 
         # Without the MESSAGE_CONTENT intent the gateway delivers the event but
         # blanks `content`. One REST read recovers it, and the REST endpoint is

@@ -185,6 +185,12 @@ class CodeAlertTests(unittest.TestCase):
         self.engine.on_message(message(LYNX_ID, "code 8"))
         self.assertEqual(self.rest.sent, [])
 
+    def test_untracked_channel_is_ignored(self):
+        row = message(LYNX_ID, "code 8")
+        row["channel_id"] = "999999999999999999"
+        self.engine.on_message(row)
+        self.assertEqual(self.rest.sent, [])
+
     def test_code_12_locks_the_channel(self):
         locked: list[bool] = []
         self.engine.mod.set_channel_locked = lambda cid, state: locked.append(state) or True
