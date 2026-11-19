@@ -24,6 +24,21 @@ BUM_ID = 1566512766066491642
 WATCH_ID = 1522388014418886746        # Dyllan / Mysterious Stranger
 KEEP_BANNED_ID = 1535047765032173668  # 『NS』Veil
 
+# Everyone allowed to see the private operator channel. Dyllan is deliberately
+# absent: he is the subject of the watch, not an operator.
+ALLOWED_OPS = frozenset({OWNER_ID, ARCEUS_ID, LYNX_ID})
+
+# A dedicated role gates the channel. Discord's Administrator permission ignores
+# channel overwrites entirely, so a member overwrite alone cannot keep an admin
+# out; denying @everyone and granting only this role is the enforceable pattern.
+OPS_ACCESS_ROLE_NAME = "ops-access"
+
+OPS_CHANNEL_NAME = "ops-command"
+OPS_CHANNEL_TOPIC = (
+    "Private operator channel. Code alerts land here. "
+    "Anyone who is not an operator is removed automatically."
+)
+
 # Roles
 ROLE_OWNER = 1571904843659092099
 ROLE_CO_OWNER = 1571904304925642903
@@ -46,6 +61,7 @@ PREFIX = "+"
 
 # Channels the bot reads and acts in. Hydrating blank gateway content costs one
 # REST read per message, so it is scoped to these rather than every channel.
+# The ops channel joins this set at runtime once it exists.
 # Override with FH_CHANNELS="123,456".
 TRACKED_CHANNELS = frozenset({MAIN_CHAT_ID})
 
@@ -79,6 +95,11 @@ class Settings:
     raid_joins: int = 8
     raid_window: float = 20.0
     muted_everyone: bool = False
+    ops_channel_id: int = 0
+    ops_role_id: int = 0
+    # Dyllan watch. `watch_enabled` is the master switch for the feature;
+    # `watch_armed` is what code 11 turns on and what actually logs his traffic.
+    watch_armed: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -95,6 +116,9 @@ class Settings:
             "raid_joins": self.raid_joins,
             "raid_window": self.raid_window,
             "muted_everyone": self.muted_everyone,
+            "ops_channel_id": self.ops_channel_id,
+            "ops_role_id": self.ops_role_id,
+            "watch_armed": self.watch_armed,
         }
 
     @classmethod
@@ -103,6 +127,9 @@ class Settings:
         kwargs = {k: v for k, v in (data or {}).items() if k in known}
         if "keep_banned" in kwargs:
             kwargs["keep_banned"] = set(int(x) for x in kwargs["keep_banned"])
+        for key in ("ops_channel_id", "ops_role_id"):
+            if key in kwargs:
+                kwargs[key] = int(kwargs[key] or 0)
         return cls(**kwargs)
 
 

@@ -80,10 +80,42 @@ Three independent paths, all skipping the keep-banned set:
 every restart. `enforce_keep_banned` re-applies a ban whenever an exception
 member's ban goes missing.
 
+## The private operator channel
+
+`ops.py` owns one channel, `#ops-command`, and the `ops-access` role that gates
+it. Sensitive codes alert there instead of in open chat, and the Dyllan watch
+writes there too.
+
+Access is **one role**, not a per-member allow list, because of how Discord
+resolves permissions:
+
+- the `Administrator` permission bypasses channel overwrites completely. No
+  overwrite, deny or member-level entry can hide a channel from an admin.
+- a member-level deny also loses to any role that grants the permission, so a
+  per-member allow list would look private without being private.
+
+So the channel denies `@everyone`, and allows exactly two principals: the bot
+and the `ops-access` role. That role carries no permissions of its own; it is
+only a key. `ensure()` grants it to the owner, Arceus and Lynx and re-asserts
+every overwrite on each start, which is what makes a manual permission edit
+temporary.
+
+What that does **not** buy is secrecy from administrators. `+ops audit` reports
+this honestly rather than implying the channel is airtight. The only fix is for
+the owner to remove `Administrator` from the roles that do not need it, which the
+bot cannot and should not do by itself.
+
+Defence in depth, for anyone who does get in: every message in the channel is
+checked against `ALLOWED_OPS` before anything else runs. A non-operator's
+overwrite is removed, their messages are purged, and the operators are told. If
+the removal fails because a higher role grants access, the bot escalates to a
+kick, which needs no permission hierarchy.
+
 ## State
 
-`bot/state.json` holds settings, strikes, role snapshots, the known-ban cache and
-the last 200 incidents. Writes are atomic (`mkstemp` then `os.replace`) and
+`bot/state.json` holds settings, strikes, role snapshots, the known-ban cache,
+the ops channel and gate-role ids, the armed state of the Dyllan watch, and the
+last 200 incidents. Writes are atomic (`mkstemp` then `os.replace`) and
 coalesced to at most one every five seconds unless forced.
 
 ## Testing

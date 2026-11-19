@@ -13,6 +13,11 @@ or any of the operator roles (Owner, Co owner, Administrator).
 | `+ping` | user | Round-trip latency |
 | `+stats` | user | Uptime, counters, and the live switch states |
 | `+codes` | user | The codebook with severity and pings |
+| `+ops` | owner | Private channel status |
+| `+ops create` | owner | Create or find the private channel |
+| `+ops lock` | owner | Re-apply its permissions and the gate role |
+| `+ops audit` | owner | Show who can actually read it |
+| `+dyllan on\|off` | owner | Arm or disarm the watch |
 | `+incidents [n]` | mod | Recent code hits, newest last |
 | `+question <text>` | user | Posts a question and pings Lynx for `+answer` |
 | `+whois <user>` | mod | Join date, roles, strikes |
@@ -62,23 +67,45 @@ immediately and reports how many bans were lifted.
 
 Codes need no prefix. Say the number, or the phrase.
 
-| Code | Title | Severity | Pings | Deletes trigger |
-| --- | --- | --- | --- | --- |
-| 1 | All clear | low | - | no |
-| 2 | Moving position | low | - | no |
-| 3 | Request backup | medium | owner, Arceus | no |
-| 4 | Comms compromised | high | owner, Arceus | yes |
-| 5 | Target acquired | medium | owner | no |
-| 6 | Extraction needed | high | owner, Arceus | no |
-| 7 | Going dark | medium | - | yes |
-| 8 | Suspected spy | high | owner, Arceus | no |
-| 9 | Cover blown | critical | owner, Arceus | yes |
-| 10 | Getting found out | critical | owner, Arceus | yes |
-| 11 | Silent alarm | high | owner, Arceus | yes |
-| 12 | Full lockdown | critical | owner, Arceus | yes (locks channel) |
+`Where` is the channel the alert lands in: **chat** is `#main-chat`,
+**private** is the operator channel.
+
+| Code | Title | Severity | Pings | Deletes trigger | Where |
+| --- | --- | --- | --- | --- | --- |
+| 1 | All clear | low | - | no | chat |
+| 2 | Moving position | low | - | no | chat |
+| 3 | Request backup | medium | owner, Arceus | no | chat |
+| 4 | Comms compromised | high | owner, Arceus | yes | private |
+| 5 | Target acquired | medium | owner | no | chat |
+| 6 | Extraction needed | high | owner, Arceus | no | chat |
+| 7 | Going dark | medium | - | yes | chat |
+| 8 | Suspected spy | high | owner, Arceus | no | chat |
+| 9 | Cover blown | critical | owner, Arceus | yes | private |
+| 10 | Getting found out | critical | owner, Arceus | yes | private |
+| 11 | Dyllan's back | high | owner, Arceus | no | private |
+| 12 | Full lockdown | critical | owner, Arceus | yes (locks channel) | private |
+| 13 | Raid incoming | critical | owner, Arceus | no | private |
+| 14 | Leak | critical | owner, Arceus | yes (purges 10m) | private |
+| 15 | Impersonation | high | owner, Arceus | no | private |
+| 16 | Admin abuse | critical | owner, Arceus | no | private |
+| 17 | DM compromise | critical | owner, Arceus | yes | private |
+| 18 | Evidence secured | low | owner | no | chat |
+| 19 | Radio silence | high | owner, Arceus | yes | private |
+| 20 | Server compromised | critical | owner, Arceus | no | private |
+
+### Code 11 arms the watch
+
+Code 11 means Dyllan is back. It does two things beyond alerting: it **arms the
+watch**, and from then on every message he sends is copied into the private
+channel with the rules it tripped (`slur`, `invite`, `mass mention`,
+`caps flood`, `punish request`). The watch stays armed across restarts until you
+turn it off with `+dyllan off`.
 
 Matching accepts `code 8`, `code-8`, `code: 8`, `code #8`, `code8`, `code eight`,
 and `code VIII`. A bare number never triggers, so ordinary chatter stays quiet.
+
+`ops: true` sends the alert to the private channel instead of open chat.
+`arm_watch: true` starts watching the flagged member.
 
 Add codes in `bot/codes.json`:
 
@@ -94,6 +121,8 @@ Add codes in `bot/codes.json`:
       "ping_arceus": false,
       "silence": true,
       "response": "What the bot says",
+      "ops": true,
+      "arm_watch": false,
       "aliases": ["new code phrase"]
     }
   ]

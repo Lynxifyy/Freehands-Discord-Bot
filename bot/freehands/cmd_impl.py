@@ -47,6 +47,10 @@ def register(engine) -> None:
     add(Spec("automod", _bind(engine, automod), "owner", "+automod on|off", "auto-mod switch"))
     add(Spec("codesense", _bind(engine, codesense), "owner", "+codesense on|off", "code sensing switch"))
     add(Spec("watch", _bind(engine, watch), "owner", "+watch on|off", "watch the flagged member"))
+    add(Spec("ops", _bind(engine, ops), "owner", "+ops create|lock|status",
+             "the private operator channel", aliases=("opchan",)))
+    add(Spec("dyllan", _bind(engine, dyllan), "owner", "+dyllan on|off|status",
+             "watch Dyllan's messages", aliases=("ms",)))
     add(Spec("lock", _bind(engine, lock), "owner", "+lock", "lock the channel"))
     add(Spec("unlock", _bind(engine, unlock), "owner", "+unlock", "unlock the channel"))
     add(Spec("lockvote", _bind(engine, lockvote), "owner", "+lockvote yes|no", "vote on a lockdown"))
@@ -241,6 +245,68 @@ def watch(engine, command, user_id, message_id, channel_id, roles):
                      f"Watching <@{WATCH_ID}> is now {'on' if value else 'off'}.")
     _switch(engine, command, message_id, channel_id, "watch",
             engine.settings.watch_enabled, setter)
+
+
+# -- private operator channel --------------------------------------------
+def ops(engine, command, user_id, message_id, channel_id, roles):
+    arg = (command.args[0].lower() if command.args else "status")
+    if arg in ("create", "new", "recreate"):
+        try:
+            cid = engine.ensure_ops(force_new=arg in ("new", "recreate"))
+        except Exception as exc:
+            engine.reply(channel_id, message_id, f"Could not create it: `{exc}`")
+            return
+        engine.reply(channel_id, message_id,
+                     f"Private channel ready: <#{cid}>. Only the owner, Arceus, "
+                     f"Lynx and me can see it.")
+        return
+    if arg == "lock":
+        engine.ops._lock()
+        engine.ops._grant_role()
+        engine.reply(channel_id, message_id,
+                     f"Overwrites re-applied and the gate role re-granted on "
+                     f"{engine.ops.describe()}.")
+        return
+    if arg == "audit":
+        a = engine.ops.audit()
+        lines = [f"**Ops channel audit** {engine.ops.describe()}", ""]
+        lines.append(f"**Allowed** owner, Arceus, Lynx, me")
+        if a.missing:
+            lines.append(f"**Missing the gate role** {', '.join(f'<@{u}>' for u in a.missing)}")
+        lines.append("")
+        lines.append(
+            "**Note** Discord's Administrator permission ignores channel "
+            "overwrites, so anyone holding a role with Administrator can still "
+            "read this channel. Only the owner can fix that by removing "
+            "Administrator from those roles."
+        )
+        engine.reply(channel_id, message_id, "\n".join(lines))
+        return
+    state = "armed" if engine.settings.watch_armed else "disarmed"
+    engine.reply(
+        channel_id, message_id,
+        f"**Ops channel** {engine.ops.describe()}\n"
+        f"**Allowed** owner, Arceus, Lynx, me\n"
+        f"**Dyllan watch** {state}\n"
+        f"\n`+ops create` | `+ops lock` | `+dyllan on|off`",
+    )
+
+
+def dyllan(engine, command, user_id, message_id, channel_id, roles):
+    arg = (command.args[0].lower() if command.args else "status")
+    if arg in ("on", "arm", "start", "watch"):
+        engine.arm_watch(True)
+        engine.reply(channel_id, message_id,
+                     f"Watch armed. Every message from <@{WATCH_ID}> now goes "
+                     f"to {engine.ops.describe()} and is screened.")
+        return
+    if arg in ("off", "disarm", "stop"):
+        engine.arm_watch(False)
+        engine.reply(channel_id, message_id, f"Watch disarmed for <@{WATCH_ID}>.")
+        return
+    state = "armed" if engine.settings.watch_armed else "disarmed"
+    engine.reply(channel_id, message_id,
+                 f"<@{WATCH_ID}> watch is **{state}**. `+dyllan on|off` to change it.")
 
 
 # -- channel state -------------------------------------------------------

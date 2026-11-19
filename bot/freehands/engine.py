@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from . import text
-from .codebook import Codebook, render_alert
+from .codebook import EYES, SIREN, Codebook, render_alert
 from .commands import Command, Registry, parse, user_id_from
 from .config import (
     ARCEUS_ID,
@@ -29,6 +29,7 @@ from .config import (
 )
 from .log import log, stats
 from .moderation import Moderator
+from .ops import OpsChannel
 from .rest import Rest, RestError
 from .store import Store
 
@@ -56,6 +57,9 @@ class Engine:
         self._cooldowns: dict[tuple[int, str], float] = {}
         self._member_roles: dict[int, set[int]] = {}
         self.channels = _tracked_channels()
+        self.ops = OpsChannel(rest, store)
+        if self.ops.channel_id:
+            self.channels.add(self.ops.channel_id)
         from . import cmd_impl  # local import keeps the registry wiring in one place
 
         cmd_impl.register(self)
@@ -105,6 +109,19 @@ class Engine:
         self._member_roles[user_id] = roles
         stats.bump("messages")
 
+        # The ops channel is checked before anything else: a non-operator must
+        # not be able to run a command or raise a code from inside it.
+        if channel_id == self.ops.channel_id:
+            if not self.ops.allows(user_id):
+                self.evict_intruder(user_id, content, channel_id, author)
+                return
+            command = parse(content)
+            if command:
+                self.dispatch(command, user_id, message_id, channel_id, roles)
+            return
+
+        self.watch_screen(user_id, content, message_id, channel_id, author)
+
         if self.settings.codes_enabled and self.handle_code(
             content, user_id, message_id, channel_id, author
         ):
@@ -117,6 +134,66 @@ class Engine:
             command = parse(content)
             if command:
                 self.dispatch(command, user_id, message_id, channel_id, roles)
+
+    # -- ops channel ------------------------------------------------------
+    def evict_intruder(self, user_id: int, content: str, channel_id: int,
+                       author: dict) -> None:
+        """A non-operator posted in the private channel.
+
+        Order matters: revoke access and clear their messages first, then tell
+        the operators, so the notice cannot be read by the person being removed.
+        """
+        result = self.ops.evict(user_id)
+        name = author.get("username") or str(user_id)
+        lines = [
+            f"{SIREN} **Unauthorised access** - <@{user_id}> (`{name}`) posted here.",
+            "",
+            f"**Access revoked** {'yes' if result.removed else 'FAILED - a role above the bot grants it'}",
+            f"**Messages removed** {result.purged}",
+        ]
+        if content:
+            lines += ["", f"**They said** {content[:500]}"]
+        if not result.removed:
+            lines += [
+                "",
+                "_Escalating to a kick, which needs no permission hierarchy._",
+            ]
+            status = self.rest.kick(GUILD_ID, user_id, reason="entered the private ops channel")
+            lines.append(f"**Kick** {'sent' if status in (200, 204) else f'failed ({status})'}")
+        self.ops.post("\n".join(lines))
+        self.store.add_incident({
+            "at": int(time.time()), "code": 0, "title": "ops intrusion",
+            "by": user_id, "trigger": content[:120],
+        })
+        log.warning("non-operator %s posted in the ops channel", user_id)
+
+    def ensure_ops(self, force_new: bool = False) -> int:
+        channel_id = self.ops.ensure(force_new)
+        self.channels.add(channel_id)
+        return channel_id
+
+    # -- Dyllan watch -----------------------------------------------------
+    def arm_watch(self, armed: bool) -> None:
+        self.settings.watch_armed = armed
+        self.store.save(force=True)
+
+    def watch_screen(self, user_id: int, content: str, message_id: int,
+                     channel_id: int, author: dict) -> None:
+        """Log and screen every message from the watched member."""
+        if user_id != WATCH_ID or not self.settings.watch_enabled:
+            return
+        if not self.settings.watch_armed:
+            return
+
+        flags = text.screen(content)
+        name = author.get("username") or str(user_id)
+        lines = [f"{EYES} **Watch** - <@{user_id}> (`{name}`) in <#{channel_id}>"]
+        if flags:
+            lines.append(f"**Flags** {', '.join(flags)}")
+        lines += ["", content[:900] or "_(empty or attachment only)_"]
+        self.ops.post("\n".join(lines))
+        stats.bump("watched")
+        log.info("watched message from %s (flags: %s)", user_id, flags or "none")
 
     # -- codes ------------------------------------------------------------
     def handle_code(self, content: str, user_id: int, message_id: int,
@@ -135,16 +212,21 @@ class Engine:
             users.append(str(OWNER_ID))
         if code.ping_arceus:
             users.append(str(ARCEUS_ID))
+        mentions = {
+            "parse": [],
+            "users": list(dict.fromkeys(users)),
+            "roles": [str(r) for r in code.ping_roles],
+        }
+        # Sensitive codes go to the private channel only; if it does not exist
+        # yet the alert still has to land somewhere, so it falls back to open
+        # chat with a note instead of disappearing.
+        target = MAIN_CHAT_ID
+        if code.ops and self.ops.channel_id:
+            target = self.ops.channel_id
+        elif code.ops:
+            body += "\n\n_No ops channel yet - run `+ops create`._"
         try:
-            self.rest.send(
-                MAIN_CHAT_ID,
-                body,
-                allowed_mentions={
-                    "parse": [],
-                    "users": list(dict.fromkeys(users)),
-                    "roles": [str(r) for r in code.ping_roles],
-                },
-            )
+            self.rest.send(target, body, allowed_mentions=mentions)
         except RestError as exc:
             log.error("code alert failed: %s", exc)
         if not code.silence:
@@ -162,6 +244,11 @@ class Engine:
 
         if code.number == 12:
             self.mod.set_channel_locked(channel_id, True)
+        if code.arm_watch and self.settings.watch_enabled and not self.settings.watch_armed:
+            self.arm_watch(True)
+            self.ops.post(
+                f"{EYES} **Watch armed** - <@{WATCH_ID}> is now logged to this channel."
+            )
         return True
 
     # -- auto-moderation --------------------------------------------------

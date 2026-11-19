@@ -1,28 +1,308 @@
 {
-  "_comment": "Overrides and additions for the built-in codebook. A code listed here is merged onto its default; unknown numbers become new codes.",
+  "_comment": "Edit freely; the bot merges this over its built-in table. 'ops': true sends the alert to the private channel. 'arm_watch': true starts watching the flagged member.",
   "codes": [
+    {
+      "number": 1,
+      "title": "All clear",
+      "meaning": "Stand down, the situation is resolved.",
+      "severity": "low",
+      "emoji": "✅",
+      "ping_owner": false,
+      "ping_arceus": false,
+      "silence": false,
+      "aliases": [
+        "all clear",
+        "stand down"
+      ]
+    },
+    {
+      "number": 2,
+      "title": "Moving position",
+      "meaning": "Relocating to a secondary channel.",
+      "severity": "low",
+      "emoji": "🎯",
+      "ping_owner": false,
+      "ping_arceus": false,
+      "silence": false,
+      "aliases": [
+        "moving position"
+      ]
+    },
+    {
+      "number": 3,
+      "title": "Request backup",
+      "meaning": "More operators are needed.",
+      "severity": "medium",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "request backup",
+        "need backup"
+      ]
+    },
+    {
+      "number": 4,
+      "title": "Comms compromised",
+      "meaning": "Assume the channel is being read.",
+      "severity": "high",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "aliases": [
+        "comms compromised"
+      ],
+      "ops": true
+    },
+    {
+      "number": 5,
+      "title": "Target acquired",
+      "meaning": "The subject is identified.",
+      "severity": "medium",
+      "emoji": "🎯",
+      "ping_owner": true,
+      "ping_arceus": false,
+      "silence": false,
+      "aliases": [
+        "target acquired"
+      ]
+    },
+    {
+      "number": 6,
+      "title": "Extraction needed",
+      "meaning": "An operator needs to be pulled out.",
+      "severity": "high",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "extraction needed"
+      ]
+    },
+    {
+      "number": 7,
+      "title": "Going dark",
+      "meaning": "No further traffic from the sender.",
+      "severity": "medium",
+      "emoji": "🌑",
+      "ping_owner": false,
+      "ping_arceus": false,
+      "silence": true,
+      "aliases": [
+        "going dark"
+      ]
+    },
     {
       "number": 8,
       "title": "Suspected spy",
-      "meaning": "Someone in this channel is suspected of spying on the server.",
+      "meaning": "A member of this channel is suspected of spying.",
       "severity": "high",
-      "emoji": "\ud83d\udc40",
+      "emoji": "👀",
       "ping_owner": true,
       "ping_arceus": true,
-      "response": "**Code 8 — suspected spy.** Operators pinged. Nobody say anything sensitive in this channel until it is cleared. Watch who reacts and who goes quiet.",
-      "aliases": ["suspected spy", "there's a spy", "theres a spy", "we have a spy"]
+      "silence": false,
+      "aliases": [
+        "suspected spy",
+        "there's a spy",
+        "theres a spy",
+        "we have a spy"
+      ]
+    },
+    {
+      "number": 9,
+      "title": "Cover blown",
+      "meaning": "Identity is exposed; evacuate the operation.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "aliases": [
+        "cover blown"
+      ],
+      "ops": true,
+      "purge_seconds": 300
     },
     {
       "number": 10,
       "title": "Getting found out",
-      "meaning": "The sender believes they are being discovered right now.",
+      "meaning": "The sender believes they are being discovered.",
       "severity": "critical",
-      "emoji": "\ud83d\udea8",
+      "emoji": "🚨",
       "ping_owner": true,
       "ping_arceus": true,
       "silence": true,
-      "response": "**Code 10 — operator is being found out.** Trigger message removed. Operators, check your DMs and assume this channel is watched. Do not reply to the sender here.",
-      "aliases": ["getting found out", "im getting found out", "i'm getting found out"]
+      "aliases": [
+        "getting found out",
+        "im getting found out",
+        "i'm getting found out"
+      ],
+      "ops": true
+    },
+    {
+      "number": 11,
+      "title": "Dyllan's back",
+      "meaning": "Dyllan has returned to the server.",
+      "severity": "high",
+      "emoji": "👀",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "dyllans back",
+        "dyllan's back",
+        "dyllan is back",
+        "dyllan back",
+        "mysterious stranger is back",
+        "ms is back"
+      ],
+      "ops": true,
+      "arm_watch": true
+    },
+    {
+      "number": 12,
+      "title": "Full lockdown",
+      "meaning": "Lock the channel and stop all traffic.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "aliases": [
+        "full lockdown"
+      ],
+      "ops": true
+    },
+    {
+      "number": 13,
+      "title": "Raid incoming",
+      "meaning": "A join wave is starting or already underway.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "raid incoming",
+        "raid",
+        "we're getting raided"
+      ],
+      "ops": true
+    },
+    {
+      "number": 14,
+      "title": "Leak",
+      "meaning": "Server content is being copied out.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "aliases": [
+        "leak",
+        "we have a leak",
+        "leaking"
+      ],
+      "ops": true,
+      "purge_seconds": 600
+    },
+    {
+      "number": 15,
+      "title": "Impersonation",
+      "meaning": "Someone is posing as an operator or the bot.",
+      "severity": "high",
+      "emoji": "👀",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "impersonation",
+        "someone is impersonating",
+        "fake operator"
+      ],
+      "ops": true
+    },
+    {
+      "number": 16,
+      "title": "Admin abuse",
+      "meaning": "A staff account is acting against the server.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "admin abuse",
+        "rogue admin",
+        "staff is compromised"
+      ],
+      "ops": true
+    },
+    {
+      "number": 17,
+      "title": "DM compromise",
+      "meaning": "An operator's direct messages are exposed.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "aliases": [
+        "dm compromise",
+        "dms are compromised",
+        "account compromised"
+      ],
+      "ops": true
+    },
+    {
+      "number": 18,
+      "title": "Evidence secured",
+      "meaning": "Proof has been saved; it is safe to move on.",
+      "severity": "low",
+      "emoji": "✅",
+      "ping_owner": true,
+      "ping_arceus": false,
+      "silence": false,
+      "aliases": [
+        "evidence secured",
+        "evidence saved",
+        "proof secured"
+      ]
+    },
+    {
+      "number": 19,
+      "title": "Radio silence",
+      "meaning": "Nobody posts until an operator clears it.",
+      "severity": "high",
+      "emoji": "🔇",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "aliases": [
+        "radio silence",
+        "stop posting",
+        "everyone stop talking"
+      ],
+      "ops": true
+    },
+    {
+      "number": 20,
+      "title": "Server compromised",
+      "meaning": "The guild itself may be under someone else's control.",
+      "severity": "critical",
+      "emoji": "🚨",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": false,
+      "aliases": [
+        "server compromised",
+        "server is compromised",
+        "guild compromised"
+      ],
+      "ops": true
     }
   ]
 }
