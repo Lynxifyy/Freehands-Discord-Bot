@@ -107,9 +107,15 @@ bot cannot and should not do by itself.
 
 Defence in depth, for anyone who does get in: every message in the channel is
 checked against `ALLOWED_OPS` before anything else runs. A non-operator's
-overwrite is removed, their messages are purged, and the operators are told. If
-the removal fails because a higher role grants access, the bot escalates to a
-kick, which needs no permission hierarchy.
+messages are purged and the operators are told.
+
+Whether their access was actually removed is decided by `can_view()`, not by the
+`DELETE` status: Discord answers `200` to an overwrite deletion even when no
+overwrite existed, so the status proves nothing. `can_view()` resolves the
+permission bits the way Discord does - union the base permissions, short-circuit
+on `Administrator`, then apply the `@everyone`, role and member overwrites. When
+a member can still view the channel afterwards, the notice says `FAILED` and the
+bot escalates to a kick, which needs no permission hierarchy.
 
 ## State
 
