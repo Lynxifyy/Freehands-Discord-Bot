@@ -20,8 +20,17 @@
 **Code sense.** Say `code 8` in chat and the bot pings Arceus and the owner with
 the eyes emoji - code 8 means *suspected spy*. Say `code 10`, *I'm getting found
 out*, and the alert goes out while the trigger message is deleted and the bot
-stays quiet instead of replying in the channel. Twelve codes ship by default and
+stays quiet instead of replying in the channel. Twenty codes ship by default and
 [`bot/codes.json`](bot/codes.json) can add or override any of them.
+
+**Private operator channel.** Sensitive codes alert in `#ops-command` instead of
+open chat. Only the owner, Arceus and Lynx can see it; everyone else is denied at
+the channel level, and anyone who does post there is removed and reported. See
+[the Administrator caveat](docs/ARCHITECTURE.md#the-private-operator-channel).
+
+**The Dyllan watch.** `code 11` means *Dyllan's back*. It arms a watch that
+copies every message he sends into the private channel and flags what it tripped -
+slurs, invites, mass mentions. It stays armed until `+dyllan off`.
 
 **Ban protection.** Anti-ban lifts every ban this bot did not issue, from three
 independent paths: a periodic sweep, the audit log, and the live ban event.
@@ -80,6 +89,8 @@ Prefix is `+`. See [docs/COMMANDS.md](docs/COMMANDS.md) for every command and
 ```
 +help                    what you can run
 +codes                   the codebook
++ops [create|lock|audit]  the private operator channel
++dyllan on|off            arm or disarm the watch
 +antiban on|off          ban protection
 +keepbanned add|remove   anti-ban exceptions
 +mute <user> [10m]       timeout

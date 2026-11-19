@@ -42,6 +42,8 @@ class Code:
     ping_roles: tuple[str, ...] = ()
     silence: bool = False             # delete the trigger message (go dark)
     purge_seconds: int = 0            # delete recent messages from the sender
+    ops: bool = False                 # alert into the private channel, not open chat
+    arm_watch: bool = False           # start watching the flagged member
     response: str = ""
     aliases: tuple[str, ...] = ()
 
@@ -71,7 +73,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     4: Code(
         4, "Comms compromised", "Assume the channel is being read.",
-        "high", SIREN, ping_owner=True, ping_arceus=True, silence=True,
+        "high", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
         response="Comms compromised. Going quiet — move to a private channel.",
         aliases=("comms compromised",),
     ),
@@ -105,7 +107,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     9: Code(
         9, "Cover blown", "Identity is exposed; evacuate the operation.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True,
+        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
         purge_seconds=300,
         response=(
             "**Code 9 — cover blown.** Evacuate. Stop posting here. "
@@ -115,7 +117,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     10: Code(
         10, "Getting found out", "The sender believes they are being discovered.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True,
+        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
         response=(
             "**Code 10 — operator is being found out.** "
             "Message removed. @here is not pinged; operators, check your DMs "
@@ -124,16 +126,92 @@ DEFAULT_CODES: dict[int, Code] = {
         aliases=("getting found out", "im getting found out", "i'm getting found out"),
     ),
     11: Code(
-        11, "Silent alarm", "Something is wrong; respond without drawing attention.",
-        "high", EYES, ping_owner=True, ping_arceus=True, silence=True,
-        response="Silent alarm logged. Operators are aware. Act normal.",
-        aliases=("silent alarm",),
+        11, "Dyllan's back", "Dyllan has returned to the server.",
+        "high", EYES, ping_owner=True, ping_arceus=True, ops=True, arm_watch=True,
+        response=(
+            "**Code 11 - Dyllan's back.** The watch is armed. Every message he "
+            "sends is now logged here and screened. Operators pinged."
+        ),
+        aliases=("dyllans back", "dyllan's back", "dyllan is back", "dyllan back",
+                 "mysterious stranger is back", "ms is back"),
     ),
     12: Code(
         12, "Full lockdown", "Lock the channel and stop all traffic.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True,
+        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
         response="**Code 12 — lockdown.** Channel locked, traffic stopped.",
         aliases=("full lockdown",),
+    ),
+    13: Code(
+        13, "Raid incoming", "A join wave is starting or already underway.",
+        "critical", SIREN, ping_owner=True, ping_arceus=True, ops=True,
+        response=(
+            "**Code 13 — raid incoming.** Raise verification and stop inviting. "
+            "Auto-lockdown will trigger on its own if joins keep landing."
+        ),
+        aliases=("raid incoming", "raid", "we're getting raided"),
+    ),
+    14: Code(
+        14, "Leak", "Server content is being copied out.",
+        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        purge_seconds=600,
+        response=(
+            "**Code 14 — leak.** Screenshots or files are leaving the server. "
+            "Trigger removed and the sender's recent messages purged. "
+            "Operators, check who has been downloading."
+        ),
+        aliases=("leak", "we have a leak", "leaking"),
+    ),
+    15: Code(
+        15, "Impersonation", "Someone is posing as an operator or the bot.",
+        "high", EYES, ping_owner=True, ping_arceus=True, ops=True,
+        response=(
+            "**Code 15 — impersonation.** Check display names, avatars and role "
+            "colours. Real operators will not DM you first."
+        ),
+        aliases=("impersonation", "someone is impersonating", "fake operator"),
+    ),
+    16: Code(
+        16, "Admin abuse", "A staff account is acting against the server.",
+        "critical", SIREN, ping_owner=True, ping_arceus=True, ops=True,
+        response=(
+            "**Code 16 — admin abuse.** Stop granting roles. Review the audit "
+            "log and pull the account's permissions before anything else."
+        ),
+        aliases=("admin abuse", "rogue admin", "staff is compromised"),
+    ),
+    17: Code(
+        17, "DM compromise", "An operator's direct messages are exposed.",
+        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        response=(
+            "**Code 17 — DM compromise.** Assume every private conversation is "
+            "readable. Rotate the token, then change passwords."
+        ),
+        aliases=("dm compromise", "dms are compromised", "account compromised"),
+    ),
+    18: Code(
+        18, "Evidence secured", "Proof has been saved; it is safe to move on.",
+        "low", WHITE_CHECK, ping_owner=True,
+        response="Evidence secured. Nothing further needed here.",
+        aliases=("evidence secured", "evidence saved", "proof secured"),
+    ),
+    19: Code(
+        19, "Radio silence", "Nobody posts until an operator clears it.",
+        "high", "🔇", ping_owner=True, ping_arceus=True,
+        silence=True, ops=True,
+        response=(
+            "**Code 19 — radio silence.** Stop posting in open chat. Operators "
+            "will clear it with code 1."
+        ),
+        aliases=("radio silence", "stop posting", "everyone stop talking"),
+    ),
+    20: Code(
+        20, "Server compromised", "The guild itself may be under someone else's control.",
+        "critical", SIREN, ping_owner=True, ping_arceus=True, ops=True,
+        response=(
+            "**Code 20 — server compromised.** Treat every staff account as "
+            "hostile. Owner: verify your 2FA and active sessions now."
+        ),
+        aliases=("server compromised", "server is compromised", "guild compromised"),
     ),
 }
 
@@ -198,6 +276,8 @@ class Codebook:
                     "ping_roles", base.ping_roles if base else ())),
                 silence=bool(entry.get("silence", base.silence if base else False)),
                 purge_seconds=int(entry.get("purge_seconds", base.purge_seconds if base else 0)),
+                ops=bool(entry.get("ops", base.ops if base else False)),
+                arm_watch=bool(entry.get("arm_watch", base.arm_watch if base else False)),
                 response=entry.get("response", base.response if base else ""),
                 aliases=tuple(entry.get("aliases", base.aliases if base else ())),
             )

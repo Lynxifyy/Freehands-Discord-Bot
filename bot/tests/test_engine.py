@@ -47,6 +47,14 @@ class FakeRest:
         self.members: dict[int, dict] = {}
         self.ban_rows: list[dict] = []
         self.audit_rows: list[dict] = []
+        self.channel_rows: list[dict] = []
+        self.channel_rows_by_id: dict[int, dict] = {}
+        self.created_channels: list[dict] = []
+        self.overwrites: dict[tuple[int, int], tuple[int, str, str]] = {}
+        self.overwrite_deletes: list[tuple[int, int]] = []
+        self.kicks: list[int] = []
+        self.role_rows: list[dict] = []
+        self.created_roles: list[dict] = []
         self.status = 204
 
     # -- reads ------------------------------------------------------------
@@ -102,6 +110,7 @@ class FakeRest:
         return self.status
 
     def kick(self, guild_id, user_id, reason=None):
+        self.kicks.append(user_id)
         return self.status
 
     def add_role(self, guild_id, user_id, role_id, reason=None):
@@ -111,6 +120,47 @@ class FakeRest:
     def remove_role(self, guild_id, user_id, role_id, reason=None):
         self.role_removed.append((user_id, role_id))
         return self.status
+
+    # -- channels ---------------------------------------------------------
+    def channels(self, guild_id):
+        return self.channel_rows
+
+    def channel(self, channel_id):
+        return self.channel_rows_by_id.get(channel_id)
+
+    def create_channel(self, guild_id, name, kind=0, overwrites=None,
+                       topic=None, parent_id=None, reason=None):
+        self.created_channels.append(
+            {"name": name, "overwrites": overwrites or [], "topic": topic}
+        )
+        cid = 555000000000000001
+        self.channel_rows.append({"id": str(cid), "type": 0, "name": name})
+        self.channel_rows_by_id[cid] = {"id": str(cid), "name": name}
+        return {"id": str(cid), "name": name}
+
+    def put_overwrite(self, channel_id, target_id, kind, allow, deny, reason=None):
+        self.overwrites[(channel_id, target_id)] = (kind, allow, deny)
+        return 204
+
+    def delete_overwrite(self, channel_id, target_id, reason=None):
+        self.overwrite_deletes.append((channel_id, target_id))
+        if self.status not in (200, 204):
+            return self.status
+        self.overwrites.pop((channel_id, target_id), None)
+        return self.status
+
+    # -- roles ------------------------------------------------------------
+    def request(self, method, route, body=None, **kw):
+        if method == "GET" and route.endswith("/roles"):
+            return self.role_rows
+        if method == "POST" and route.endswith("/roles"):
+            rid = 777000000000000001
+            row = {"id": str(rid), "name": body["name"],
+                   "permissions": str(body.get("permissions", "0")), "position": 1}
+            self.role_rows.append(row)
+            self.created_roles.append(body)
+            return row
+        raise AssertionError(f"unexpected request {method} {route}")
 
     def try_request(self, method, route, body=None, **kw):
         return self.status, None
@@ -385,3 +435,193 @@ class RoleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class OpsChannelTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+        self.cid = self.engine.ensure_ops()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_channel_is_gated_by_one_role(self):
+        """Access is a single role, not per-member grants.
+
+        Discord's Administrator permission ignores channel overwrites, so a
+        member-level allow list cannot keep an admin out. Denying @everyone and
+        allowing only the gate role is the enforceable pattern.
+        """
+        self.assertEqual(len(self.rest.created_channels), 1)
+        rows = {int(o["id"]): o for o in self.rest.created_channels[0]["overwrites"]}
+        self.assertEqual(rows[GUILD_ID]["deny"], str(1 << 10 | 1 << 11))
+        self.assertEqual(rows[BOT_ID]["allow"], str(1 << 10 | 1 << 11 | 1 << 16 | 1 << 15 | 1 << 6))
+        self.assertEqual(rows[self.engine.ops.role_id]["allow"], str(1 << 10 | 1 << 11 | 1 << 16 | 1 << 15 | 1 << 6))
+        # Operators get in via the role, never via a per-member grant.
+        for user_id in (OWNER_ID, ARCEUS_ID, LYNX_ID, WATCH_ID):
+            self.assertNotIn(user_id, rows)
+
+    def test_access_role_is_created_and_granted_to_operators(self):
+        self.assertEqual(len(self.rest.created_roles), 1)
+        self.assertEqual(self.rest.created_roles[0]["name"], "ops-access")
+        self.assertEqual(self.rest.created_roles[0]["permissions"], "0")
+        granted = {uid for uid, rid in self.rest.role_added if rid == self.engine.ops.role_id}
+        self.assertEqual(granted, {OWNER_ID, ARCEUS_ID, LYNX_ID})
+        self.assertNotIn(WATCH_ID, granted)
+
+    def test_ensure_reuses_an_existing_channel(self):
+        first = self.engine.ensure_ops()
+        second = self.engine.ensure_ops()
+        self.assertEqual(first, second)
+        self.assertEqual(len(self.rest.created_channels), 1)
+
+    def test_lock_reasserts_every_overwrite(self):
+        self.rest.overwrites.clear()
+        self.engine.ops._lock()
+        self.assertIn((self.cid, BOT_ID), self.rest.overwrites)
+        self.assertIn((self.cid, self.engine.ops.role_id), self.rest.overwrites)
+        self.assertIn((self.cid, GUILD_ID), self.rest.overwrites)
+
+    def test_operator_may_post_in_the_channel(self):
+        self.engine.on_message({
+            "id": "5", "channel_id": str(self.cid), "content": "code 8",
+            "author": {"id": str(LYNX_ID), "username": "lynx", "bot": False},
+            "member": {"roles": []},
+        })
+        # An operator raising a code there is not treated as an intruder.
+        self.assertEqual(self.rest.overwrite_deletes, [])
+
+    def test_intruder_is_evicted_and_reported(self):
+        self.engine.on_message({
+            "id": "6", "channel_id": str(self.cid), "content": "let me in",
+            "author": {"id": "424242", "username": "snoop", "bot": False},
+            "member": {"roles": []},
+        })
+        self.assertIn((self.cid, 424242), self.rest.overwrite_deletes)
+        notice = [s for s in self.rest.sent if "Unauthorised access" in s["content"]]
+        self.assertEqual(len(notice), 1)
+        self.assertIn("424242", notice[0]["content"])
+        self.assertIn("let me in", notice[0]["content"])
+        self.assertEqual(self.rest.kicks, [])
+
+    def test_intruder_cannot_run_commands(self):
+        self.engine.on_message({
+            "id": "7", "channel_id": str(self.cid), "content": "+takeall 1",
+            "author": {"id": "424242", "username": "snoop", "bot": False},
+            "member": {"roles": []},
+        })
+        self.assertEqual(self.rest.role_removed, [])
+
+    def test_failed_revocation_escalates_to_a_kick(self):
+        self.rest.status = 403
+        self.engine.on_message({
+            "id": "8", "channel_id": str(self.cid), "content": "hi",
+            "author": {"id": "424242", "username": "snoop", "bot": False},
+            "member": {"roles": []},
+        })
+        self.assertIn(424242, self.rest.kicks)
+
+    def test_sensitive_codes_route_to_the_private_channel(self):
+        self.engine.on_message(message(LYNX_ID, "code 10", message_id=42))
+        self.assertEqual(self.rest.sent[-1]["channel"], self.cid)
+        self.assertIn("CODE 10", self.rest.sent[-1]["content"])
+
+    def test_code_8_still_lands_in_open_chat(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        self.assertEqual(self.rest.sent[0]["channel"], MAIN_CHAT_ID)
+
+
+class DyllanWatchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+        self.cid = self.engine.ensure_ops()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_code_11_means_dyllan_is_back(self):
+        hit = self.engine.book.sense("code 11")
+        self.assertEqual(hit.code.number, 11)
+        self.assertEqual(hit.code.title, "Dyllan's back")
+        self.assertTrue(hit.code.arm_watch)
+
+    def test_code_11_arms_the_watch_and_alerts_privately(self):
+        self.engine.on_message(message(LYNX_ID, "code 11"))
+        self.assertTrue(self.engine.settings.watch_armed)
+        self.assertEqual(self.rest.sent[-1]["channel"], self.cid)
+        self.assertTrue(any("Watch armed" in s["content"] for s in self.rest.sent))
+
+    def test_phrase_also_raises_code_11(self):
+        self.engine.on_message(message(LYNX_ID, "dyllan is back"))
+        self.assertTrue(self.engine.settings.watch_armed)
+
+    def test_watch_is_silent_until_armed(self):
+        self.engine.on_message(message(WATCH_ID, "hello everyone"))
+        self.assertEqual(self.rest.sent, [])
+
+    def test_armed_watch_logs_every_message_to_the_private_channel(self):
+        self.engine.arm_watch(True)
+        self.engine.on_message(message(WATCH_ID, "hello everyone", message_id=70))
+        watch = [s for s in self.rest.sent if "**Watch**" in s["content"]]
+        self.assertEqual(len(watch), 1)
+        self.assertEqual(watch[0]["channel"], self.cid)
+        self.assertIn("hello everyone", watch[0]["content"])
+
+    def test_armed_watch_flags_rule_breaks(self):
+        self.engine.arm_watch(True)
+        self.engine.on_message(message(WATCH_ID, "join discord.gg/abc"))
+        watch = [s for s in self.rest.sent if "**Watch**" in s["content"]][0]
+        self.assertIn("invite", watch["content"])
+
+    def test_watch_ignores_everyone_else(self):
+        self.engine.arm_watch(True)
+        self.engine.on_message(message(LYNX_ID, "hello"))
+        self.assertFalse(any("**Watch**" in s["content"] for s in self.rest.sent))
+
+    def test_master_switch_disables_the_watch(self):
+        self.engine.arm_watch(True)
+        self.engine.settings.watch_enabled = False
+        self.engine.on_message(message(WATCH_ID, "hello"))
+        self.assertFalse(any("**Watch**" in s["content"] for s in self.rest.sent))
+
+    def test_armed_state_survives_a_restart(self):
+        self.engine.arm_watch(True)
+        reloaded = Store(Path(self.tmp.name) / "state.json")
+        reloaded.load()
+        self.assertTrue(reloaded.settings.watch_armed)
+
+
+class CodebookTests(unittest.TestCase):
+    def test_all_twenty_codes_exist(self):
+        book = Codebook()
+        self.assertEqual(sorted(book.codes), list(range(1, 21)))
+
+    def test_unknown_numbers_do_not_trigger(self):
+        book = Codebook()
+        self.assertIsNone(book.sense("code 99"))
+        self.assertIsNone(book.sense("42"))
+
+    def test_dyllan_watch_code_is_the_only_arming_code(self):
+        book = Codebook()
+        arming = [c.number for c in book.codes.values() if c.arm_watch]
+        self.assertEqual(arming, [11])
+
+    def test_json_overrides_keep_the_routing_flags(self):
+        """A codes.json entry must not silently drop ops/arm_watch."""
+        import json
+        import tempfile
+
+        payload = {"codes": [
+            {"number": 11, "title": "Dyllan's back", "ops": True, "arm_watch": True},
+            {"number": 8, "title": "Suspected spy", "ops": False},
+        ]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "codes.json"
+            path.write_text(json.dumps(payload))
+            book = Codebook.load(path)
+        self.assertTrue(book.codes[11].arm_watch)
+        self.assertTrue(book.codes[11].ops)
+        self.assertFalse(book.codes[8].ops)
+        self.assertEqual(book.codes[11].title, "Dyllan's back")

@@ -235,6 +235,46 @@ class Rest:
         )
         return (payload or {}).get("audit_log_entries", [])
 
+    # -- channels ---------------------------------------------------------
+    def channels(self, guild_id: int) -> list[dict]:
+        return self.request("GET", f"/guilds/{guild_id}/channels") or []
+
+    def channel(self, channel_id: int) -> dict | None:
+        status, payload = self.try_request("GET", f"/channels/{channel_id}")
+        return payload if status == 200 else None
+
+    def create_channel(self, guild_id: int, name: str, kind: int = 0,
+                       overwrites: list[dict] | None = None,
+                       topic: str | None = None,
+                       parent_id: int | None = None,
+                       reason: str | None = None) -> dict:
+        body: dict[str, Any] = {"name": name, "type": kind,
+                                "permission_overwrites": overwrites or []}
+        if topic is not None:
+            body["topic"] = topic
+        if parent_id is not None:
+            body["parent_id"] = str(parent_id)
+        return self.request("POST", f"/guilds/{guild_id}/channels", body, reason=reason)
+
+    def edit_channel(self, channel_id: int, **fields) -> dict:
+        return self.request("PATCH", f"/channels/{channel_id}", fields) or {}
+
+    def delete_channel(self, channel_id: int, reason: str | None = None) -> int:
+        return self.try_request("DELETE", f"/channels/{channel_id}", reason=reason)[0]
+
+    def put_overwrite(self, channel_id: int, target_id: int, kind: int,
+                      allow: str, deny: str, reason: str | None = None) -> int:
+        return self.try_request(
+            "PUT", f"/channels/{channel_id}/permissions/{target_id}",
+            {"type": kind, "allow": allow, "deny": deny}, reason=reason,
+        )[0]
+
+    def delete_overwrite(self, channel_id: int, target_id: int,
+                         reason: str | None = None) -> int:
+        return self.try_request(
+            "DELETE", f"/channels/{channel_id}/permissions/{target_id}", reason=reason
+        )[0]
+
 
 def _retry_after(raw: str) -> float:
     try:

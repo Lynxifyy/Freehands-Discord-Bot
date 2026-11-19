@@ -111,5 +111,21 @@ def human_duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
+def screen(text: str) -> list[str]:
+    """Name every rule a watched message trips. Order is stable for the log."""
+    flags: list[str] = []
+    if has_slur(text):
+        flags.append("slur")
+    if has_invite(text):
+        flags.append("invite")
+    if mentions_everyone(text):
+        flags.append("mass mention")
+    if is_caps_flood(text):
+        flags.append("caps flood")
+    if is_punish_request(text):
+        flags.append("punish request")
+    return flags
+
+
 def looks_like_code(text: str) -> bool:
     return bool(text) and bool(_CODE_HINT.search(text))

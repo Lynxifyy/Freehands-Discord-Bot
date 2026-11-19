@@ -38,6 +38,11 @@ def prime(engine: Engine) -> None:
     except RestError as exc:
         log.warning("role bootstrap failed: %s", exc)
     engine.mod.seed_known_bans()
+    try:
+        channel_id = engine.ensure_ops()
+        log.info("ops channel ready (%s)", channel_id)
+    except RestError as exc:
+        log.error("ops channel unavailable: %s", exc)
 
 
 def maintenance(engine: Engine) -> None:
