@@ -9,6 +9,7 @@ remembered per route so a burst of moderation calls waits instead of getting
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -16,6 +17,8 @@ import urllib.request
 from typing import Any
 
 from .config import API
+
+log = logging.getLogger("freehands.rest")
 from .log import log
 
 USER_AGENT = "DiscordBot (https://github.com/Lynxifyy/Freehands-Discord-Bot, 2.0.0)"
@@ -164,6 +167,27 @@ class Rest:
         quoted = urllib.parse.quote(emoji, safe="")
         route = f"/channels/{channel_id}/messages/{message_id}/reactions/{quoted}/@me"
         return self.try_request("PUT", route)[0]
+
+    def open_dm(self, user_id: int) -> int | None:
+        """Open (or reuse) the bot's DM channel with a user, or None if closed."""
+        try:
+            payload = self.request("POST", "/users/@me/channels", {"recipient_id": str(user_id)})
+        except RestError as exc:
+            log.info("dm channel refused for %s: %s", user_id, exc.status)
+            return None
+        return int(payload["id"]) if payload.get("id") else None
+
+    def dm(self, user_id: int, content: str, **extra) -> bool:
+        """Best-effort direct message. A closed DM is normal, not an error."""
+        channel_id = self.open_dm(user_id)
+        if not channel_id:
+            return False
+        try:
+            self.send(channel_id, content, **extra)
+        except RestError as exc:
+            log.info("dm to %s failed: %s", user_id, exc.status)
+            return False
+        return True
 
     def typing(self, channel_id: int) -> int:
         return self.try_request("POST", f"/channels/{channel_id}/typing")[0]
