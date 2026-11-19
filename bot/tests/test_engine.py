@@ -46,6 +46,8 @@ class FakeRest:
         self.ban_calls: list[tuple[int, str | None]] = []
         self.role_removed: list[tuple[int, int]] = []
         self.role_added: list[tuple[int, int]] = []
+        self.dms: list[dict] = []
+        self.dm_open = True
         self.members: dict[int, dict] = {}
         self.ban_rows: list[dict] = []
         self.audit_rows: list[dict] = []
@@ -66,6 +68,16 @@ class FakeRest:
     def member(self, guild_id, user_id):
         row = self.members.get(user_id)
         return row
+
+    # -- direct messages ---------------------------------------------------
+    def open_dm(self, user_id):
+        return 900000000000000000 + user_id % 1000
+
+    def dm(self, user_id, content, **extra):
+        if not self.dm_open:
+            return False
+        self.dms.append({"user": user_id, "content": content})
+        return True
 
     def bans(self, guild_id):
         return self.ban_rows
@@ -117,10 +129,18 @@ class FakeRest:
 
     def add_role(self, guild_id, user_id, role_id, reason=None):
         self.role_added.append((user_id, role_id))
+        if self.status in (200, 204):
+            row = self.members.setdefault(user_id, {"user": {"id": str(user_id)}, "roles": []})
+            if str(role_id) not in row["roles"]:
+                row["roles"].append(str(role_id))
         return self.status
 
     def remove_role(self, guild_id, user_id, role_id, reason=None):
         self.role_removed.append((user_id, role_id))
+        if self.status in (200, 204):
+            row = self.members.get(user_id)
+            if row and str(role_id) in row.get("roles", []):
+                row["roles"].remove(str(role_id))
         return self.status
 
     # -- channels ---------------------------------------------------------
@@ -188,6 +208,7 @@ def build_engine(tmp: str) -> tuple[Engine, FakeRest]:
     engine.mod.roles = {
         1234: RoleInfo(1234, "1234", 1, False, 0),
         ROLE_ETERNAL: RoleInfo(ROLE_ETERNAL, "Eternal", 1, False, 0),
+        ROLE_MOD: RoleInfo(ROLE_MOD, "Moderator", 5, False, 0),
     }
     engine.mod.bot_top = 100
     return engine, rest
@@ -559,6 +580,161 @@ class TempOwnershipTests(unittest.TestCase):
         out = self._run(f"+Temp Ownership <@{WATCH_ID}>")
         self.assertIn("refused", out)
         self.assertFalse(self.engine.tempown.active(WATCH_ID))
+
+
+class BankruptTests(unittest.TestCase):
+    """`+bankrupt` strips everything and `+bankrupt recover` gives it back."""
+
+    # Real Discord snowflakes are 15+ digits; user_id_from rejects anything
+    # shorter, so these must be realistic.
+    VICTIM = 555000111222333444
+    PLAIN = 777000222333444555
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+        self.rest.members[self.VICTIM] = {
+            "user": {"id": str(self.VICTIM)}, "roles": [str(ROLE_ETERNAL), "1234"],
+        }
+        self.rest.members[self.PLAIN] = {"user": {"id": str(self.PLAIN)}, "roles": []}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, content, uid=LYNX_ID, roles=None):
+        self.engine.on_message({
+            "id": "1", "channel_id": str(MAIN_CHAT_ID), "content": content,
+            "author": {"id": str(uid), "username": "u", "bot": False},
+            "member": {"roles": [str(r) for r in (roles or [])]},
+        })
+        return self.rest.replies[-1]["content"] if self.rest.replies else ""
+
+    def _roles(self, uid=None):
+        return set(self.rest.members[uid or self.VICTIM]["roles"])
+
+    # -- the main action --------------------------------------------------
+    def test_strips_every_manageable_role(self):
+        out = self._run(f"+bankrupt <@{self.VICTIM}>")
+        self.assertIn("Bankrupt", out)
+        self.assertNotIn("1234", self._roles())
+        self.assertIn((self.VICTIM, 1234), self.rest.role_removed)
+
+    def test_keeps_the_base_member_role(self):
+        """@Eternal is the guild's floor; stripping it would remove them entirely."""
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        self.assertIn(str(ROLE_ETERNAL), self._roles())
+
+    def test_notifies_the_user_by_dm(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        self.assertEqual(len(self.rest.dms), 1)
+        self.assertEqual(self.rest.dms[0]["user"], self.VICTIM)
+        self.assertIn("removed", self.rest.dms[0]["content"].lower())
+
+    def test_reports_when_the_dm_could_not_be_sent(self):
+        self.rest.dm_open = False
+        out = self._run(f"+bankrupt <@{self.VICTIM}>")
+        self.assertIn("DMs are closed", out)
+        self.assertEqual(self.rest.dms, [])
+
+    def test_records_what_was_taken(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        record = self.engine.store.bankrupt[str(self.VICTIM)]
+        self.assertEqual(record["roles"], [1234])
+        self.assertEqual(record["by"], LYNX_ID)
+
+    def test_every_tier_can_run_it(self):
+        for uid, roles in ((LYNX_ID, []), (self.PLAIN, []), (1186091734137045043, [ROLE_MOD])):
+            with self.subTest(tier=uid):
+                self.rest.members[self.VICTIM]["roles"] = [str(ROLE_ETERNAL), "1234"]
+                out = self._run(f"+bankrupt <@{self.VICTIM}>", uid=uid, roles=roles)
+                self.assertIn("Bankrupt", out)
+
+    # -- recovery ---------------------------------------------------------
+    def test_recover_restores_the_exact_roles(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        out = self._run(f"+bankrupt recover <@{self.VICTIM}>")
+        self.assertIn("Recovered", out)
+        self.assertIn("1234", self._roles())
+
+    def test_recover_clears_the_record(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        self._run(f"+bankrupt recover <@{self.VICTIM}>")
+        self.assertNotIn(str(self.VICTIM), self.engine.store.bankrupt)
+
+    def test_recover_twice_reports_nothing_on_record(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        self._run(f"+bankrupt recover <@{self.VICTIM}>")
+        out = self._run(f"+bankrupt recover <@{self.VICTIM}>")
+        self.assertIn("No bankruptcy on record", out)
+
+    def test_a_moderator_can_recover(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        out = self._run(f"+bankrupt recover <@{self.VICTIM}>", uid=1186091734137045043, roles=[ROLE_MOD])
+        self.assertIn("Recovered", out)
+
+    def test_a_plain_member_cannot_recover(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        out = self._run(f"+bankrupt recover <@{self.VICTIM}>", uid=self.PLAIN)
+        self.assertIn("Only a moderator or the owner", out)
+        self.assertNotIn("1234", self._roles())
+
+    def test_restore_keeps_working_as_an_alias(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        out = self._run(f"+bankrupt restore <@{self.VICTIM}>")
+        self.assertIn("Recovered", out)
+
+    def test_record_survives_a_restart(self):
+        self._run(f"+bankrupt <@{self.VICTIM}>")
+        store = Store(Path(self.tmp.name) / "state.json")
+        store.load()
+        self.assertIn(str(self.VICTIM), store.bankrupt)
+        self.assertEqual(store.bankrupt[str(self.VICTIM)]["roles"], [1234])
+
+    # -- guards -----------------------------------------------------------
+    def test_cannot_bankrupt_the_owner(self):
+        for uid in (OWNER_ID, LYNX_ID, ARCEUS_ID):
+            with self.subTest(target=uid):
+                out = self._run(f"+bankrupt <@{uid}>")
+                self.assertIn("protected operator", out)
+
+    def test_cannot_bankrupt_yourself(self):
+        out = self._run(f"+bankrupt <@{self.PLAIN}>", uid=self.PLAIN)
+        self.assertIn("cannot bankrupt yourself", out)
+
+    def test_cannot_bankrupt_the_bot(self):
+        out = self._run(f"+bankrupt <@{BOT_ID}>")
+        self.assertIn("bankrupt myself", out)
+
+    def test_a_member_cannot_bankrupt_staff(self):
+        self.rest.members[1186091734137045043] = {
+            "user": {"id": "1186091734137045043"}, "roles": [str(ROLE_MOD)],
+        }
+        out = self._run(f"+bankrupt <@1186091734137045043>", uid=self.PLAIN)
+        self.assertIn("is staff", out)
+        self.assertIn(str(ROLE_MOD), self.rest.members[1186091734137045043]["roles"])
+
+    def test_an_owner_can_bankrupt_a_moderator(self):
+        self.rest.members[1186091734137045043] = {
+            "user": {"id": "1186091734137045043"}, "roles": [str(ROLE_ETERNAL), str(ROLE_MOD)],
+        }
+        out = self._run(f"+bankrupt <@1186091734137045043>")
+        self.assertIn("Bankrupt", out)
+        self.assertNotIn(str(ROLE_MOD), self.rest.members[1186091734137045043]["roles"])
+
+    def test_missing_target_shows_usage(self):
+        out = self._run("+bankrupt")
+        self.assertIn("+bankrupt", out)
+
+    def test_unknown_member_is_reported(self):
+        out = self._run("+bankrupt <@999999999999999999>")
+        self.assertIn("no roles I am allowed to remove", out)
+
+    def test_a_failed_removal_is_not_recorded(self):
+        """Only roles actually taken go into the record, so recovery is honest."""
+        self.rest.status = 403
+        out = self._run(f"+bankrupt <@{self.VICTIM}>")
+        self.assertIn("no roles I am allowed to remove", out)
+        self.assertNotIn(str(self.VICTIM), self.engine.store.bankrupt)
 
 
 if __name__ == "__main__":
