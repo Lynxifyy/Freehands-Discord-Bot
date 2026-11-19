@@ -19,6 +19,7 @@ from freehands.codebook import Codebook
 from freehands.config import (
     ARCEUS_ID,
     BOT_ID,
+    CODE8_MEMBERS,
     GUILD_ID,
     LYNX_ID,
     MAIN_CHAT_ID,
@@ -26,9 +27,11 @@ from freehands.config import (
     ROLE_CO_OWNER,
     ROLE_MOD,
     ROLE_ETERNAL,
+    SPY_ID,
     WATCH_ID,
 )
 from freehands.engine import Engine
+from freehands.ops import AlertRoom
 from freehands.moderation import RoleInfo
 from freehands.store import Store
 
@@ -215,10 +218,10 @@ def build_engine(tmp: str) -> tuple[Engine, FakeRest]:
 
 
 def message(user_id: int, content: str, message_id: int = 1,
-            roles: list[int] | None = None) -> dict:
+            roles: list[int] | None = None, channel_id: int | None = None) -> dict:
     return {
         "id": str(message_id),
-        "channel_id": str(MAIN_CHAT_ID),
+        "channel_id": str(channel_id or MAIN_CHAT_ID),
         "content": content,
         "author": {"id": str(user_id), "username": "tester", "bot": False},
         "member": {"roles": [str(r) for r in (roles or [])]},
@@ -236,6 +239,7 @@ class CodeAlertTests(unittest.TestCase):
     def test_code_8_alerts_and_pings_owner_and_arceus(self):
         self.engine.on_message(message(LYNX_ID, "code 8"))
         self.assertEqual(len(self.rest.sent), 1)
+        self.assertNotEqual(self.rest.sent[0]["channel"], MAIN_CHAT_ID)
         body = self.rest.sent[0]["content"]
         self.assertIn("CODE 8", body)
         self.assertIn(f"<@{OWNER_ID}>", body)
@@ -737,6 +741,176 @@ class BankruptTests(unittest.TestCase):
         self.assertNotIn(str(self.VICTIM), self.engine.store.bankrupt)
 
 
+class AlertRoomTests(unittest.TestCase):
+    """Code 8 opens a private room for exactly four people and says nothing in chat."""
+
+    OUTSIDER = 888000111222333444
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+        self.rest.role_rows.append(
+            {"id": str(GUILD_ID), "name": "@everyone", "permissions": "0", "position": 0}
+        )
+        self.engine.ensure_ops()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _room_id(self):
+        return next(iter(self.engine.rooms))
+
+    def _overwrites(self):
+        for row in self.rest.created_channels:
+            if str(row["name"]).startswith("alert-8"):
+                return {int(o["id"]): o for o in row["overwrites"]}
+        return {}
+
+    # -- the four people --------------------------------------------------
+    def test_room_is_visible_to_exactly_the_four_named_people(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        rows = self._overwrites()
+        allowed = {OWNER_ID, ARCEUS_ID, LYNX_ID, SPY_ID, BOT_ID}
+        for user_id in allowed:
+            self.assertIn(user_id, rows, f"{user_id} must be allowed")
+            self.assertEqual(rows[user_id]["type"], 1, "must be a MEMBER overwrite")
+            self.assertEqual(rows[user_id]["deny"], "0")
+        self.assertEqual(set(rows), allowed | {GUILD_ID})
+
+    def test_everyone_is_denied(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        self.assertEqual(self._overwrites()[GUILD_ID]["deny"], str(1 << 10 | 1 << 11))
+
+    def test_no_role_overwrite_is_used(self):
+        """A role could be handed to someone and would silently widen the room."""
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        for target, row in self._overwrites().items():
+            if target != GUILD_ID:
+                self.assertEqual(row["type"], 1)
+
+    def test_dyllan_and_moderators_are_not_in_the_room(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        rows = self._overwrites()
+        self.assertNotIn(WATCH_ID, rows)
+
+    def test_allows_only_the_four_plus_the_bot(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room = self.engine.rooms[self._room_id()]
+        for user_id in (OWNER_ID, ARCEUS_ID, LYNX_ID, SPY_ID):
+            self.assertTrue(room.allows(user_id))
+        self.assertFalse(room.allows(self.OUTSIDER))
+        self.assertFalse(room.allows(WATCH_ID))
+
+    # -- secrecy ----------------------------------------------------------
+    def test_nothing_is_posted_in_open_chat(self):
+        self.engine.on_message(message(LYNX_ID, "code 8", message_id=77))
+        self.assertNotIn(MAIN_CHAT_ID, {row["channel"] for row in self.rest.sent})
+
+    def test_the_trigger_message_is_deleted(self):
+        self.engine.on_message(message(LYNX_ID, "code 8", message_id=77))
+        self.assertIn((MAIN_CHAT_ID, 77), self.rest.deleted)
+
+    def test_the_alert_carries_the_pings_inside_the_room(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        body = self.rest.sent[0]["content"]
+        self.assertIn("CODE 8", body)
+        self.assertIn(f"<@{OWNER_ID}>", body)
+        self.assertIn(f"<@{ARCEUS_ID}>", body)
+
+    def test_the_alert_pings_only_arceus_and_the_owner(self):
+        """Spy sits in the room but is not pinged - the room is not a summon."""
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        users = self.rest.sent[0]["allowed_mentions"]["users"]
+        self.assertEqual(set(users), {str(OWNER_ID), str(ARCEUS_ID), str(LYNX_ID)})
+        self.assertNotIn(str(SPY_ID), users)
+
+    def test_only_one_room_is_opened_per_alert(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        self.engine.on_message(message(ARCEUS_ID, "code 8"))
+        self.assertEqual(len([r for r in self.rest.created_channels
+                              if str(r["name"]).startswith("alert-8")]), 2)
+
+    # -- persistence ------------------------------------------------------
+    def test_the_room_is_recorded_in_settings(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        self.assertEqual(len(self.engine.settings.room_channels), 1)
+
+    def test_the_room_survives_a_restart(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room_id = self._room_id()
+        store = Store(Path(self.tmp.name) / "state.json")
+        store.load()
+        self.assertIn(room_id, store.settings.room_channels.values())
+
+    def test_a_deleted_room_is_dropped_from_the_record(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room = self.engine.rooms[self._room_id()]
+        self.rest.channel_rows_by_id.pop(room.channel_id, None)
+        self.rest.channels_by_id = {}
+        name = next(iter(self.engine.settings.room_channels))
+        fresh = AlertRoom(self.rest, self.engine.store, CODE8_MEMBERS)
+        self.assertIsNone(fresh.load(name))
+        self.assertNotIn(name, self.engine.store.settings.room_channels)
+
+    # -- intrusions -------------------------------------------------------
+    def test_an_outsider_is_evicted_from_the_room(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room_id = self._room_id()
+        self.engine.on_message(message(self.OUTSIDER, "let me in", channel_id=room_id))
+        self.assertIn((room_id, self.OUTSIDER), self.rest.overwrite_deletes)
+
+    def test_an_outsider_message_is_not_relayed_to_the_room(self):
+        """Their words appear only inside the intrusion alert, never as content."""
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room_id = self._room_id()
+        before = len(self.rest.sent)
+        self.engine.on_message(message(self.OUTSIDER, "hello", channel_id=room_id))
+        posted = self.rest.sent[before:]
+        self.assertTrue(posted, "the operators must be told")
+        for row in posted:
+            self.assertIn("Unauthorised access", row["content"])
+
+    def test_an_outsider_cannot_run_a_command_in_the_room(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room_id = self._room_id()
+        self.engine.on_message(message(self.OUTSIDER, "+purge 50", channel_id=room_id))
+        self.assertFalse(any("Purged" in r["content"] for r in self.rest.sent))
+
+    # -- the administrator hole -------------------------------------------
+    def test_the_leak_audit_names_administrator_roles(self):
+        """A channel deny cannot beat Administrator, so say so out loud."""
+        self.rest.role_rows.append(
+            {"id": "1570969297226834091", "name": "Administrator",
+             "permissions": str(1 << 3), "position": 14}
+        )
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        body = self.rest.sent[0]["content"]
+        self.assertIn("not fully private", body)
+        self.assertIn("Administrator", body)
+
+    def test_a_clean_guild_gets_no_leak_warning(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        self.assertNotIn("not fully private", self.rest.sent[0]["content"])
+
+    def test_the_bots_own_roles_are_not_reported_as_leakers(self):
+        self.rest.role_rows.append(
+            {"id": "1572012974913101856", "name": "Freehands",
+             "permissions": str(1 << 3), "position": 22}
+        )
+        self.rest.members[BOT_ID] = {"user": {"id": str(BOT_ID)},
+                                     "roles": ["1572012974913101856"]}
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        self.assertNotIn("Freehands`", self.rest.sent[0]["content"])
+
+    # -- the other codes are untouched ------------------------------------
+    def test_code_10_keeps_its_existing_routing(self):
+        """Only code 8 is room-based. Code 10 stays in the ops channel."""
+        self.engine.on_message(message(LYNX_ID, "code 10"))
+        self.assertEqual(self.rest.sent[0]["channel"], self.engine.ops.channel_id)
+        self.assertFalse(any(str(r["name"]).startswith("alert-10")
+                             for r in self.rest.created_channels))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
@@ -873,9 +1047,18 @@ class OpsChannelTests(unittest.TestCase):
         self.assertEqual(self.rest.sent[-1]["channel"], self.cid)
         self.assertIn("CODE 10", self.rest.sent[-1]["content"])
 
-    def test_code_8_still_lands_in_open_chat(self):
+    def test_code_8_never_lands_in_open_chat(self):
+        """The whole point of the room: the alert must not be visible in chat."""
         self.engine.on_message(message(LYNX_ID, "code 8"))
-        self.assertEqual(self.rest.sent[0]["channel"], MAIN_CHAT_ID)
+        targets = {row["channel"] for row in self.rest.sent}
+        self.assertNotIn(MAIN_CHAT_ID, targets)
+
+    def test_code_8_lands_in_a_private_room(self):
+        self.engine.on_message(message(LYNX_ID, "code 8"))
+        room_id = self.engine.rooms and next(iter(self.engine.rooms))
+        self.assertTrue(room_id)
+        self.assertEqual(self.rest.sent[0]["channel"], room_id)
+        self.assertIn("CODE 8", self.rest.sent[0]["content"])
 
 
 class DyllanWatchTests(unittest.TestCase):

@@ -16,6 +16,7 @@ from .commands import Command, Registry, parse, user_id_from
 from .config import (
     ARCEUS_ID,
     BOT_ID,
+    CODE8_MEMBERS,
     GUILD_ID,
     LYNX_ID,
     MAIN_CHAT_ID,
@@ -29,7 +30,7 @@ from .config import (
 )
 from .log import log, stats
 from .moderation import Moderator
-from .ops import OpsChannel
+from .ops import AlertRoom, OpsChannel
 from .tempown import TempOwnership
 from .rest import Rest, RestError
 from .store import Store
@@ -59,9 +60,12 @@ class Engine:
         self._member_roles: dict[int, set[int]] = {}
         self.channels = _tracked_channels()
         self.ops = OpsChannel(rest, store)
+        self.rooms: dict[int, AlertRoom] = {}
         self.tempown = TempOwnership(rest, store)
         if self.ops.channel_id:
             self.channels.add(self.ops.channel_id)
+        for cid in (store.settings.room_channels or {}).values():
+            self.channels.add(int(cid))
         from . import cmd_impl  # local import keeps the registry wiring in one place
 
         cmd_impl.register(self)
@@ -113,6 +117,19 @@ class Engine:
         self._member_roles[user_id] = roles
         stats.bump("messages")
 
+        # An alert room is a private channel with a fixed member list. Anyone
+        # else is evicted before they can speak, exactly like the ops channel.
+        if channel_id in self.rooms or channel_id in self._room_ids():
+            room = self.rooms.get(channel_id) or self._room_for(channel_id)
+            if room is not None:
+                if not room.allows(user_id):
+                    self.evict_intruder(user_id, content, channel_id, author, room=room)
+                    return
+                command = parse(content)
+                if command:
+                    self.dispatch(command, user_id, message_id, channel_id, roles)
+                return
+
         # The ops channel is checked before anything else: a non-operator must
         # not be able to run a command or raise a code from inside it.
         if channel_id == self.ops.channel_id:
@@ -139,15 +156,46 @@ class Engine:
             if command:
                 self.dispatch(command, user_id, message_id, channel_id, roles)
 
+    # -- alert rooms ------------------------------------------------------
+    def _room_ids(self) -> set[int]:
+        return {int(c) for c in (self.settings.room_channels or {}).values()}
+
+    def _room_for(self, channel_id: int) -> AlertRoom | None:
+        """Rebuild a room handle after a restart from the persisted record."""
+        for name, cid in (self.settings.room_channels or {}).items():
+            if int(cid) != channel_id:
+                continue
+            room = AlertRoom(self.rest, self.store, self._room_members(name))
+            if room.load(name):
+                self.rooms[channel_id] = room
+                return room
+        return None
+
+    @staticmethod
+    def _room_members(name: str) -> frozenset[int]:
+        # Code 8 rooms are the only ones today; the name carries the code so a
+        # later room type can pick a different list without touching routing.
+        return CODE8_MEMBERS
+
+    def open_alert_room(self, code: int, opened_by: int) -> AlertRoom | None:
+        room = AlertRoom(self.rest, self.store, self._room_members(str(code)))
+        channel_id = room.open(code, opened_by)
+        if not channel_id:
+            return None
+        self.rooms[channel_id] = room
+        self.channels.add(channel_id)
+        return room
+
     # -- ops channel ------------------------------------------------------
     def evict_intruder(self, user_id: int, content: str, channel_id: int,
-                       author: dict) -> None:
-        """A non-operator posted in the private channel.
+                       author: dict, room=None) -> None:
+        """A non-member posted in a private channel.
 
         Order matters: revoke access and clear their messages first, then tell
         the operators, so the notice cannot be read by the person being removed.
         """
-        result = self.ops.evict(user_id)
+        target_room = room or self.ops
+        result = target_room.evict(user_id)
         name = author.get("username") or str(user_id)
         lines = [
             f"{SIREN} **Unauthorised access** - <@{user_id}> (`{name}`) posted here.",
@@ -162,9 +210,9 @@ class Engine:
                 "",
                 "_Escalating to a kick, which needs no permission hierarchy._",
             ]
-            status = self.rest.kick(GUILD_ID, user_id, reason="entered the private ops channel")
+            status = self.rest.kick(GUILD_ID, user_id, reason="entered a private channel")
             lines.append(f"**Kick** {'sent' if status in (200, 204) else f'failed ({status})'}")
-        self.ops.post("\n".join(lines))
+        target_room.post("\n".join(lines))
         self.store.add_incident({
             "at": int(time.time()), "code": 0, "title": "ops intrusion",
             "by": user_id, "trigger": content[:120],
@@ -221,6 +269,46 @@ class Engine:
             "users": list(dict.fromkeys(users)),
             "roles": [str(r) for r in code.ping_roles],
         }
+        if code.room:
+            # Nothing at all goes to open chat. Naming a suspected spy where the
+            # spy can read it is the one thing this code exists to avoid, so the
+            # alert is confined to the room and the trigger message is removed.
+            room = self.open_alert_room(code.number, user_id)
+            if room is None:
+                # The room could not be made. The alert must still reach the
+                # operators, so fall back to the ops channel - never open chat.
+                log.error("code %s room failed; falling back to the ops channel", code.number)
+                if self.ops.channel_id:
+                    self.ops.post(
+                        body + "\n\n_Room creation failed - this alert is in the ops channel._",
+                        allowed_users=[OWNER_ID, ARCEUS_ID, LYNX_ID],
+                    )
+            else:
+                leak = room.leakers()
+                if leak:
+                    body += (
+                        "\n\n**This room is not fully private.** These roles carry "
+                        "Administrator, which overrides a channel deny, so every "
+                        "holder can see this room: "
+                        + ", ".join(f"`{name}`" for _, name in leak)
+                        + ". Remove Administrator from them to make the room "
+                        "four-people-only."
+                    )
+                room.post(body, allowed_users=[OWNER_ID, ARCEUS_ID, LYNX_ID])
+            self.rest.delete(channel_id, message_id)
+            self.rest.react(channel_id, message_id, code.emoji)
+            self.store.add_incident({
+                "at": int(time.time()),
+                "code": code.number,
+                "title": code.title,
+                "by": user_id,
+                "trigger": hit.matched_text,
+            })
+            stats.bump("codes")
+            log.info("code %s (%s) raised by %s in a private room",
+                     code.number, code.title, user_id)
+            return True
+
         # Sensitive codes go to the private channel only; if it does not exist
         # yet the alert still has to land somewhere, so it falls back to open
         # chat with a note instead of disappearing.

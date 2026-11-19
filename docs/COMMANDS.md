@@ -96,6 +96,42 @@ Codes need no prefix. Say the number, or the phrase.
 | 19 | Radio silence | high | owner, Arceus | yes | private |
 | 20 | Server compromised | critical | owner, Arceus | no | private |
 
+### Code 8 — suspected spy
+
+Saying `code 8` (or "suspected spy", "we have a spy") **does not post anything in
+open chat**. It opens a private channel named `alert-8-<timestamp>` and puts the
+alert in there.
+
+Only four people can see that channel:
+
+| Who | Why |
+| --- | --- |
+| Owner | runs the server |
+| Arceus | operator |
+| Lynx | operator |
+| Spy (`obliviou.s`) | the person the code is for |
+
+Access is four **per-member** overwrites plus the bot, with `@everyone` denied.
+No role is used, because a role can be handed to someone and would silently widen
+the room. Anyone else who posts there is evicted: their overwrite is deleted,
+their messages in the room are purged, and the operators are told.
+
+The trigger message in the main channel is deleted, so the alert leaves no trace
+in open chat. Arceus and the owner are pinged inside the room; Spy is present but
+not pinged.
+
+**One thing the bot cannot fix for you.** A channel overwrite cannot beat the
+`Administrator` permission. Any role holding it makes the room visible to
+everyone with that role, no matter what the room denies. The bot cannot remove
+`Administrator` from a role above itself, so it does the next best thing: it names
+those roles in the alert. If you see
+
+> **This room is not fully private.** These roles carry Administrator...
+
+then the room is not four-people-only yet. Remove `Administrator` from the roles
+it lists. In the live guild that currently includes `Co owner`, `Administrator`,
+`THE KING👑`, `Darkness`, `Kostas`, `KOKO`, `efg2g` and several bots.
+
 ### Bankrupt
 
 `+bankrupt @user` strips every role the bot is allowed to remove, then DMs the
