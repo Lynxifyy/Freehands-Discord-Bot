@@ -43,6 +43,7 @@ class Code:
     silence: bool = False             # delete the trigger message (go dark)
     purge_seconds: int = 0            # delete recent messages from the sender
     ops: bool = False                 # alert into the private channel, not open chat
+    room: bool = False                # open a private room and say nothing in open chat
     arm_watch: bool = False           # start watching the flagged member
     response: str = ""
     aliases: tuple[str, ...] = ()
@@ -98,10 +99,15 @@ DEFAULT_CODES: dict[int, Code] = {
     8: Code(
         8, "Suspected spy", "A member of this channel is suspected of spying.",
         "high", EYES, ping_owner=True, ping_arceus=True,
+        # Nothing is posted in open chat: naming a suspected spy where the spy
+        # can read it defeats the point. The alert goes to a private room and
+        # the trigger message is removed.
+        room=True, silence=True,
         response=(
             "**Code 8 — suspected spy.** "
-            "Operators pinged. Nobody say anything sensitive in this channel "
-            "until it is cleared. Watch who reacts and who goes quiet."
+            "This room exists so the alert never appears in open chat. "
+            "Nobody say anything sensitive in the main channel until it is "
+            "cleared. Watch who reacts and who goes quiet."
         ),
         aliases=("suspected spy", "there's a spy", "theres a spy", "we have a spy"),
     ),

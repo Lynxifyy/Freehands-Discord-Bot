@@ -29,6 +29,11 @@ with no access role, so nobody can be handed in. Everyone else is denied, and
 anyone who does post there is purged and reported. See
 [the Administrator caveat](docs/ARCHITECTURE.md#the-private-operator-channel).
 
+**Code 8 opens a private room.** Saying `code 8` posts nothing in open chat. It
+opens a private channel visible to exactly four people - owner, Arceus, Lynx and
+Spy - and deletes the trigger message. Anyone else who posts there is evicted.
+See `docs/COMMANDS.md` for the Administrator caveat.
+
 **Bankrupt.** `+bankrupt @user` strips every role, DMs the member to tell them,
 and remembers what it took so `+bankrupt recover @user` can hand it back. Any
 tier may bankrupt; only moderators and owners can recover. The owner, Lynx and

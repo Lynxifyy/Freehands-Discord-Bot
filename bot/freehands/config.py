@@ -30,6 +30,15 @@ KEEP_BANNED_ID = 1535047765032173668  # 『NS』Veil
 ALLOWED_OPS = frozenset({OWNER_ID, ARCEUS_ID, LYNX_ID})
 
 OPS_CHANNEL_NAME = "ops-command"
+
+# Who may sit in a code-8 alert room: the owner, Arceus, Lynx, and Spy
+# (obliviou.s) - the four named people, nobody else. Per-member overwrites, no
+# role, because a role can be handed out and would silently widen the room.
+SPY_ID = 1186091734137045043
+CODE8_MEMBERS = frozenset({OWNER_ID, ARCEUS_ID, LYNX_ID, SPY_ID})
+
+# Code-8 rooms are named `alert-8-<timestamp>` so a stale one can be spotted.
+ROOM_CHANNEL_PREFIX = "alert"
 OPS_CHANNEL_TOPIC = (
     "Private operator channel. Code alerts land here. "
     "Anyone who is not an operator is removed automatically."
@@ -92,6 +101,9 @@ class Settings:
     raid_window: float = 20.0
     muted_everyone: bool = False
     ops_channel_id: int = 0
+    # Live code alert rooms, keyed by the channel name suffix. Kept here so a
+    # restart can clean up rooms it no longer has a handle on.
+    room_channels: dict[str, int] = field(default_factory=dict)
     # Dyllan watch. `watch_enabled` is the master switch for the feature;
     # `watch_armed` is what code 11 turns on and what actually logs his traffic.
     watch_armed: bool = False
@@ -115,6 +127,7 @@ class Settings:
             "raid_window": self.raid_window,
             "muted_everyone": self.muted_everyone,
             "ops_channel_id": self.ops_channel_id,
+            "room_channels": self.room_channels,
             "watch_armed": self.watch_armed,
             "temp_grant": self.temp_grant,
         }
@@ -128,6 +141,10 @@ class Settings:
         for key in ("ops_channel_id",):
             if key in kwargs:
                 kwargs[key] = int(kwargs[key] or 0)
+        if "room_channels" in kwargs:
+            kwargs["room_channels"] = {
+                str(k): int(v) for k, v in (kwargs["room_channels"] or {}).items()
+            }
         return cls(**kwargs)
 
 
