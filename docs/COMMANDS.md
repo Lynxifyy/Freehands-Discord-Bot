@@ -15,9 +15,12 @@ or any of the operator roles (Owner, Co owner, Administrator).
 | `+codes` | user | The codebook with severity and pings |
 | `+ops` | owner | Private channel status |
 | `+ops create` | owner | Create or find the private channel |
-| `+ops lock` | owner | Re-apply its permissions and the gate role |
+| `+ops lock` | owner | Force it back to the three-person allow-list |
 | `+ops audit` | owner | Show who can actually read it |
 | `+dyllan on\|off` | owner | Arm or disarm the watch |
+| `+Temp Ownership @user [min]` | **Lynx only** | Lend ownership for 10 minutes |
+| `+Temp Ownership end` | **Lynx only** | Take it back immediately |
+| `+Temp Ownership status` | **Lynx only** | Who holds it, and how long is left |
 | `+incidents [n]` | mod | Recent code hits, newest last |
 | `+question <text>` | user | Posts a question and pings Lynx for `+answer` |
 | `+whois <user>` | mod | Join date, roles, strikes |
@@ -92,6 +95,20 @@ Codes need no prefix. Say the number, or the phrase.
 | 18 | Evidence secured | low | owner | no | chat |
 | 19 | Radio silence | high | owner, Arceus | yes | private |
 | 20 | Server compromised | critical | owner, Arceus | no | private |
+
+### Temporary ownership
+
+`+Temp Ownership @user` gives that member operator authority for ten minutes.
+Only Lynx can run it - not the owner, not Arceus, nobody else. Pass a number of
+minutes to change the duration: `+Temp Ownership @user 30`.
+
+It works by granting `Co owner`, which is the highest role the bot can assign.
+It cannot grant `Owner👑` because that role sits above the bot, and Discord
+refuses to grant a role above the granter. The reply says so if Discord refuses.
+
+The deadline is stored, not just the role, so the grant expires even if the bot
+restarts in between. A second grant takes the first one back before applying.
+`+Temp Ownership end` revokes immediately.
 
 ### Code 11 arms the watch
 

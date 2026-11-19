@@ -24,9 +24,14 @@ stays quiet instead of replying in the channel. Twenty codes ship by default and
 [`bot/codes.json`](bot/codes.json) can add or override any of them.
 
 **Private operator channel.** Sensitive codes alert in `#ops-command` instead of
-open chat. Only the owner, Arceus and Lynx can see it; everyone else is denied at
-the channel level, and anyone who does post there is removed and reported. See
+open chat. Access is exactly three member overwrites - owner, Arceus and Lynx -
+with no access role, so nobody can be handed in. Everyone else is denied, and
+anyone who does post there is purged and reported. See
 [the Administrator caveat](docs/ARCHITECTURE.md#the-private-operator-channel).
+
+**Temporary ownership.** Lynx can lend someone operator authority for ten
+minutes with `+Temp Ownership @user`. The deadline is stored, so it expires even
+across a restart. Only Lynx can run it.
 
 **The Dyllan watch.** `code 11` means *Dyllan's back*. It arms a watch that
 copies every message he sends into the private channel and flags what it tripped -
@@ -91,6 +96,7 @@ Prefix is `+`. See [docs/COMMANDS.md](docs/COMMANDS.md) for every command and
 +codes                   the codebook
 +ops [create|lock|audit]  the private operator channel
 +dyllan on|off            arm or disarm the watch
++Temp Ownership @user     lend ownership for 10 minutes (Lynx only)
 +antiban on|off          ban protection
 +keepbanned add|remove   anti-ban exceptions
 +mute <user> [10m]       timeout

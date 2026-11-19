@@ -25,6 +25,11 @@ class Command:
         return " ".join(self.args)
 
 
+# Commands whose name is more than one word. Kept here so `parse` can join them
+# before the registry sees a name.
+MULTIWORD = {"temp ownership"}
+
+
 @dataclass
 class Spec:
     name: str
@@ -34,6 +39,7 @@ class Spec:
     summary: str = ""
     aliases: tuple[str, ...] = ()
     cooldown: float = 0.0
+    only_user: int | None = None   # when set, nobody else may run this command
 
 
 def parse(content: str, prefix: str = PREFIX) -> Command | None:
@@ -48,7 +54,13 @@ def parse(content: str, prefix: str = PREFIX) -> Command | None:
         return None
     parts = body.split()
     name = parts[0].lower()
-    return Command(name=name, args=parts[1:], raw=body)
+    rest = parts[1:]
+    # `+Temp Ownership @user` is one command, not `+temp` with an argument, so
+    # absorb the second word when the pair forms a known multi-word command.
+    if rest and f"{name} {rest[0].lower()}" in MULTIWORD:
+        name = f"{name} {rest[0].lower()}"
+        rest = rest[1:]
+    return Command(name=name, args=rest, raw=body)
 
 
 def _mention_prefix(content: str, bot_id: int, prefix: str) -> str | None:
