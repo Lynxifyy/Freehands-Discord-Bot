@@ -1,0 +1,17 @@
+# Runtime state and secrets — never commit these.
+bot/state.json
+bot/state.json.*
+bot/freehands.log
+bot/freehands.out
+bot/freehands.pid
+bot/.token
+bot/token
+.openhands/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+.DS_Store

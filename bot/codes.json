@@ -1,0 +1,28 @@
+{
+  "_comment": "Overrides and additions for the built-in codebook. A code listed here is merged onto its default; unknown numbers become new codes.",
+  "codes": [
+    {
+      "number": 8,
+      "title": "Suspected spy",
+      "meaning": "Someone in this channel is suspected of spying on the server.",
+      "severity": "high",
+      "emoji": "\ud83d\udc40",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "response": "**Code 8 — suspected spy.** Operators pinged. Nobody say anything sensitive in this channel until it is cleared. Watch who reacts and who goes quiet.",
+      "aliases": ["suspected spy", "there's a spy", "theres a spy", "we have a spy"]
+    },
+    {
+      "number": 10,
+      "title": "Getting found out",
+      "meaning": "The sender believes they are being discovered right now.",
+      "severity": "critical",
+      "emoji": "\ud83d\udea8",
+      "ping_owner": true,
+      "ping_arceus": true,
+      "silence": true,
+      "response": "**Code 10 — operator is being found out.** Trigger message removed. Operators, check your DMs and assume this channel is watched. Do not reply to the sender here.",
+      "aliases": ["getting found out", "im getting found out", "i'm getting found out"]
+    }
+  ]
+}
