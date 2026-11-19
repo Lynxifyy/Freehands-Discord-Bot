@@ -11,6 +11,7 @@ import time
 
 from . import text
 from .commands import Spec, user_id_from
+from .tempown import DEFAULT_MINUTES
 from .config import (
     GUILD_ID,
     LYNX_ID,
@@ -71,6 +72,10 @@ def register(engine) -> None:
     add(Spec("clearstrikes", _bind(engine, clearstrikes), "owner", "+clearstrikes <user>", "reset strikes"))
     add(Spec("purge", _bind(engine, purge), "mod", "+purge [n]", "delete recent messages"))
     add(Spec("say", _bind(engine, say), "owner", "+say <text>", "speak as the bot"))
+    add(Spec("temp ownership", _bind(engine, tempownership), "owner",
+             "+Temp Ownership @user [minutes]", "lend ownership for 10 minutes",
+             aliases=("tempownership", "tempowner", "temp"), only_user=LYNX_ID))
+
     add(Spec("whois", _bind(engine, whois), "mod", "+whois <user>", "member summary"))
 
 
@@ -262,9 +267,8 @@ def ops(engine, command, user_id, message_id, channel_id, roles):
         return
     if arg == "lock":
         engine.ops._lock()
-        engine.ops._grant_role()
         engine.reply(channel_id, message_id,
-                     f"Overwrites re-applied and the gate role re-granted on "
+                     f"Locked down: only owner, Arceus and Lynx can see "
                      f"{engine.ops.describe()}.")
         return
     if arg == "audit":
@@ -274,7 +278,7 @@ def ops(engine, command, user_id, message_id, channel_id, roles):
         if a.missing:
             lines.append(
                 f"**Cannot view the channel** {', '.join(f'<@{u}>' for u in a.missing)}"
-                " - run `+ops lock` to re-grant the gate role"
+                " - run `+ops lock` to restore their overwrite"
             )
         else:
             lines.append("**All three operators can view it.**")
@@ -560,3 +564,45 @@ def whois(engine, command, user_id, message_id, channel_id, roles):
         f"Roles ({len(roles)}): {', '.join(roles) if roles else 'none'}",
         f"Strikes: {engine.store.get_strikes(target) or 'none'}",
     ]))
+
+
+def tempownership(engine, command, user_id, message_id, channel_id, roles):
+    """`+Temp Ownership @user [minutes]` - Lynx only.
+
+    Granting is not the same as being trusted: the tier check in the engine
+    treats a live grant as owner, and the sweeper takes the role back when the
+    deadline passes, including across a restart.
+    """
+    if command.args and command.args[0].lower() in ("end", "stop", "off"):
+        ok, message = engine.tempown.revoke()
+        engine.reply(channel_id, message_id, message)
+        return
+    if command.args and command.args[0].lower() in ("status", "who"):
+        tempownership_status(engine, command, user_id, message_id, channel_id, roles)
+        return
+    target = user_id_from(command.args[0]) if command.args else None
+    if not target:
+        engine.reply(channel_id, message_id,
+                     "Usage: `+Temp Ownership @user [minutes]` (default 10).")
+        return
+    minutes = DEFAULT_MINUTES
+    if len(command.args) > 1:
+        try:
+            minutes = int(command.args[1].rstrip("m"))
+        except ValueError:
+            engine.reply(channel_id, message_id, "Minutes must be a number.")
+            return
+    ok, message = engine.tempown.grant_to(target, minutes, granted_by=user_id)
+    engine.reply(channel_id, message_id, message)
+
+
+def tempownership_status(engine, command, user_id, message_id, channel_id, roles):
+    grant = engine.tempown.grant
+    if not grant or grant.expired:
+        engine.reply(channel_id, message_id, "Nobody holds temporary ownership.")
+        return
+    engine.reply(
+        channel_id, message_id,
+        f"<@{grant.user_id}> holds temporary ownership, "
+        f"{grant.seconds_left // 60}m {grant.seconds_left % 60}s left.",
+    )

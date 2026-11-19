@@ -24,14 +24,10 @@ BUM_ID = 1566512766066491642
 WATCH_ID = 1522388014418886746        # Dyllan / Mysterious Stranger
 KEEP_BANNED_ID = 1535047765032173668  # 『NS』Veil
 
-# Everyone allowed to see the private operator channel. Dyllan is deliberately
-# absent: he is the subject of the watch, not an operator.
+# The only three people who may see the private operator channel. Written as
+# per-member overwrites, not a role, so nobody can be handed access by being
+# given a role. Dyllan is deliberately absent: he is watched, not an operator.
 ALLOWED_OPS = frozenset({OWNER_ID, ARCEUS_ID, LYNX_ID})
-
-# A dedicated role gates the channel. Discord's Administrator permission ignores
-# channel overwrites entirely, so a member overwrite alone cannot keep an admin
-# out; denying @everyone and granting only this role is the enforceable pattern.
-OPS_ACCESS_ROLE_NAME = "ops-access"
 
 OPS_CHANNEL_NAME = "ops-command"
 OPS_CHANNEL_TOPIC = (
@@ -96,10 +92,12 @@ class Settings:
     raid_window: float = 20.0
     muted_everyone: bool = False
     ops_channel_id: int = 0
-    ops_role_id: int = 0
     # Dyllan watch. `watch_enabled` is the master switch for the feature;
     # `watch_armed` is what code 11 turns on and what actually logs his traffic.
     watch_armed: bool = False
+    # A live temporary-ownership grant, or None. Kept here so it survives a
+    # restart with its original deadline instead of becoming permanent.
+    temp_grant: dict | None = None
 
     def to_json(self) -> dict:
         return {
@@ -117,8 +115,8 @@ class Settings:
             "raid_window": self.raid_window,
             "muted_everyone": self.muted_everyone,
             "ops_channel_id": self.ops_channel_id,
-            "ops_role_id": self.ops_role_id,
             "watch_armed": self.watch_armed,
+            "temp_grant": self.temp_grant,
         }
 
     @classmethod
@@ -127,7 +125,7 @@ class Settings:
         kwargs = {k: v for k, v in (data or {}).items() if k in known}
         if "keep_banned" in kwargs:
             kwargs["keep_banned"] = set(int(x) for x in kwargs["keep_banned"])
-        for key in ("ops_channel_id", "ops_role_id"):
+        for key in ("ops_channel_id",):
             if key in kwargs:
                 kwargs[key] = int(kwargs[key] or 0)
         return cls(**kwargs)

@@ -43,6 +43,9 @@ def prime(engine: Engine) -> None:
         log.info("ops channel ready (%s)", channel_id)
     except RestError as exc:
         log.error("ops channel unavailable: %s", exc)
+    engine.tempown.start_sweeper()
+    if engine.tempown.sweep():
+        log.info("an expired temporary-ownership grant was reclaimed at startup")
 
 
 def maintenance(engine: Engine) -> None:

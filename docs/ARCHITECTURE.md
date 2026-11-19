@@ -82,32 +82,33 @@ member's ban goes missing.
 
 ## The private operator channel
 
-`ops.py` owns one channel, `#ops-command`, and the `ops-access` role that gates
-it. Sensitive codes alert there instead of in open chat, and the Dyllan watch
-writes there too.
+`ops.py` owns one channel, `#ops-command`. Sensitive codes alert there instead of
+in open chat, and the Dyllan watch writes there too.
 
-Access is **one role**, not a per-member allow list, because of how Discord
-resolves permissions:
+Access is **three member overwrites and nothing else** - owner, Arceus, Lynx, plus
+the bot so it can post. There is deliberately no access role:
 
-- the `Administrator` permission bypasses channel overwrites completely. No
-  overwrite, deny or member-level entry can hide a channel from an admin.
-- a member-level deny also loses to any role that grants the permission, so a
-  per-member allow list would look private without being private.
+- a role can be handed to someone else, and whoever holds it inherits the
+  channel; a member overwrite belongs to exactly one person.
+- an access role also outranks a member deny in Discord's resolution order, so a
+  stray grant could reopen the channel even after a member was removed.
 
-So the channel denies `@everyone`, and allows exactly two principals: the bot
-and the `ops-access` role. That role carries no permissions of its own; it is
-only a key. `ensure()` grants it to the owner, Arceus and Lynx and re-asserts
-every overwrite on each start, which is what makes a manual permission edit
-temporary.
+`_lock()` re-asserts all four overwrites on every start and deletes any overwrite
+that is not on the list, so a manual grant is temporary by construction rather
+than by discipline.
 
-What that does **not** buy is secrecy from administrators. `+ops audit` reports
-this honestly rather than implying the channel is airtight. The only fix is for
-the owner to remove `Administrator` from the roles that do not need it, which the
-bot cannot and should not do by itself.
+### What it cannot do
 
-Defence in depth, for anyone who does get in: every message in the channel is
-checked against `ALLOWED_OPS` before anything else runs. A non-operator's
-messages are purged and the operators are told.
+The `Administrator` permission bypasses channel overwrites completely. Any member
+holding it can read the channel no matter what the overwrites say. In this guild
+thirteen roles carry it, including `THE KING👑`, `Co owner`, `Administrator` and
+`Kostas`. That is a Discord invariant, not a bug in this code, and no API call
+can override it. `+ops audit` reports it honestly. The only remedy is for the
+owner to remove `Administrator` from roles that do not need it.
+
+Defence in depth, for anyone who does get in: every message is checked against
+`ALLOWED_OPS` before commands or codes are parsed, so a non-operator cannot run
+anything from inside. Their messages are purged and the operators are told.
 
 Whether their access was actually removed is decided by `can_view()`, not by the
 `DELETE` status: Discord answers `200` to an overwrite deletion even when no

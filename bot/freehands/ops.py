@@ -24,7 +24,6 @@ from .config import (
     ALLOWED_OPS,
     BOT_ID,
     GUILD_ID,
-    OPS_ACCESS_ROLE_NAME,
     OPS_CHANNEL_NAME,
     OPS_CHANNEL_TOPIC,
 )
@@ -64,15 +63,12 @@ class OpsChannel:
         self.rest = rest
         self.store = store
         self.channel_id: int = int(store.settings.ops_channel_id or 0)
-        self.role_id: int = int(store.settings.ops_role_id or 0)
 
     # -- lifecycle --------------------------------------------------------
     def ensure(self, force_new: bool = False) -> int:
-        """Find or create the channel and its access role, then lock it down."""
-        self._ensure_role()
+        """Find or create the channel, then force the allow-list."""
         if not force_new and self.channel_id and self.rest.channel(self.channel_id):
             self._lock()
-            self._grant_role()
             return self.channel_id
 
         found = self._find()
@@ -83,41 +79,24 @@ class OpsChannel:
         self.store.settings.ops_channel_id = self.channel_id
         self.store.save(force=True)
         self._lock()
-        self._grant_role()
         return self.channel_id
 
-    def _ensure_role(self) -> int:
-        """Create the access role if missing. Deny-only, so it grants nothing."""
-        if self.role_id and any(int(r["id"]) == self.role_id
-                                for r in self.rest.request("GET", f"/guilds/{GUILD_ID}/roles")):
-            return self.role_id
-        for row in self.rest.request("GET", f"/guilds/{GUILD_ID}/roles") or []:
-            if row["name"] == OPS_ACCESS_ROLE_NAME:
-                self.role_id = int(row["id"])
-                self.store.settings.ops_role_id = self.role_id
-                return self.role_id
-        try:
-            row = self.rest.request(
-                "POST", f"/guilds/{GUILD_ID}/roles",
-                {"name": OPS_ACCESS_ROLE_NAME, "permissions": "0",
-                 "mentionable": False, "hoist": False, "color": 0},
-                reason="private operator channel gate",
-            )
-        except RestError as exc:
-            log.error("could not create the ops access role: %s", exc)
-            return 0
-        self.role_id = int(row["id"])
-        self.store.settings.ops_role_id = self.role_id
-        self.store.save(force=True)
-        log.info("ops access role created: %s", self.role_id)
-        return self.role_id
+    def _overwrites(self) -> list[dict]:
+        """Exactly three members may see this channel: owner, Arceus, Lynx.
 
-    def _grant_role(self) -> None:
+        No role is involved. A gate role would be inherited by anyone who is
+        handed it, and a role overwrite also beats a member overwrite in some
+        ordering, so membership is written per-user and nothing else is granted.
+        The bot needs its own entry to post there.
+        """
+        rows = [
+            {"id": str(GUILD_ID), "type": TYPE_ROLE, "allow": "0", "deny": str(DENY)},
+            {"id": str(BOT_ID), "type": TYPE_MEMBER, "allow": str(ALLOW), "deny": "0"},
+        ]
         for user_id in sorted(ALLOWED_OPS):
-            status = self.rest.add_role(GUILD_ID, user_id, self.role_id,
-                                        reason="ops channel access")
-            if status not in (200, 204):
-                log.warning("could not grant ops access to %s (status %s)", user_id, status)
+            rows.append({"id": str(user_id), "type": TYPE_MEMBER,
+                         "allow": str(ALLOW), "deny": "0"})
+        return rows
 
     def _find(self) -> int:
         try:
@@ -127,21 +106,6 @@ class OpsChannel:
         except RestError as exc:
             log.warning("channel lookup failed: %s", exc)
         return 0
-
-    def _overwrites(self) -> list[dict]:
-        """@everyone denied, the gate role allowed, the bot allowed.
-
-        The gate role is the only path in. A per-member allow would let an
-        Administrator through anyway, so it is not relied on for secrecy.
-        """
-        rows = [
-            {"id": str(GUILD_ID), "type": TYPE_ROLE, "allow": "0", "deny": str(DENY)},
-            {"id": str(BOT_ID), "type": TYPE_MEMBER, "allow": str(ALLOW), "deny": "0"},
-        ]
-        if self.role_id:
-            rows.append({"id": str(self.role_id), "type": TYPE_ROLE,
-                         "allow": str(ALLOW), "deny": "0"})
-        return rows
 
     def _create(self) -> int:
         try:
@@ -156,23 +120,39 @@ class OpsChannel:
         return int(row["id"])
 
     def _lock(self) -> None:
-        """Re-assert every overwrite. Cheap, idempotent, and the only thing
-        standing between this channel and a manual permission edit."""
+        """Force the channel back to exactly the three allowed members.
+
+        Re-asserted on every start and by `+ops lock`, so a manual grant is
+        temporary. Any overwrite that is not the bot, one of the three, or
+        @everyone is deleted - otherwise a stray grant would survive forever.
+        """
         if not self.channel_id:
             return
         ok = self.rest.put_overwrite(self.channel_id, GUILD_ID, TYPE_ROLE, "0", str(DENY),
                                      reason="ops channel lockdown")
-        ok &= self.rest.put_overwrite(
-            self.channel_id, BOT_ID, TYPE_MEMBER, str(ALLOW), "0",
-            reason="ops channel allow-list",
-        )
-        if self.role_id:
+        for user_id in sorted(ALLOWED_OPS | {BOT_ID}):
             ok &= self.rest.put_overwrite(
-                self.channel_id, self.role_id, TYPE_ROLE, str(ALLOW), "0",
-                reason="ops channel gate role",
+                self.channel_id, user_id, TYPE_MEMBER, str(ALLOW), "0",
+                reason="ops channel allow-list",
             )
         if ok not in (200, 204):
             log.warning("ops channel overwrites may be incomplete (status %s)", ok)
+        self._strip_strays()
+
+    def _strip_strays(self) -> int:
+        """Delete every overwrite that is not the allow-list or @everyone."""
+        rows = self.rest.channel(self.channel_id) or {}
+        keep = {GUILD_ID, BOT_ID} | set(ALLOWED_OPS)
+        removed = 0
+        for row in rows.get("permission_overwrites", []):
+            target = int(row["id"])
+            if target in keep:
+                continue
+            if self.rest.delete_overwrite(self.channel_id, target,
+                                          reason="not on the allow-list") in (200, 204):
+                removed += 1
+                log.info("stripped stray overwrite for %s", target)
+        return removed
 
     # -- access -----------------------------------------------------------
     def allows(self, user_id: int) -> bool:

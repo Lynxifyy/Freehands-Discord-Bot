@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from freehands.config import (
     LYNX_ID,
     MAIN_CHAT_ID,
     OWNER_ID,
+    ROLE_CO_OWNER,
     ROLE_MOD,
     ROLE_ETERNAL,
     WATCH_ID,
@@ -445,6 +447,120 @@ class RoleTests(unittest.TestCase):
         self.assertIn((4444, 1234), self.rest.role_added)
 
 
+class TempOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, content, uid=LYNX_ID):
+        self.engine.on_message({
+            "id": "1", "channel_id": str(MAIN_CHAT_ID), "content": content,
+            "author": {"id": str(uid), "username": "u", "bot": False},
+            "member": {"roles": []},
+        })
+        return self.rest.replies[-1]["content"] if self.rest.replies else ""
+
+    def test_lynx_can_grant_ten_minutes(self):
+        out = self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self.assertIn("temporary owner for 10 minutes", out)
+        self.assertIn((WATCH_ID, ROLE_CO_OWNER), self.rest.role_added)
+        self.assertTrue(self.engine.tempown.active(WATCH_ID))
+
+    def test_lowercase_and_bare_mention_work(self):
+        out = self._run(f"+temp ownership <@{WATCH_ID}> 5")
+        self.assertIn("5 minutes", out)
+        self.assertTrue(self.engine.tempown.active(WATCH_ID))
+
+    def test_nobody_else_can_run_it(self):
+        """The owner is an owner tier but still cannot lend ownership."""
+        out = self._run(f"+Temp Ownership <@{WATCH_ID}>", uid=OWNER_ID)
+        self.assertIn("Only Lynx", out)
+        self.assertEqual(self.rest.role_added, [])
+
+    def test_a_moderator_cannot_run_it(self):
+        out = self._run(f"+Temp Ownership <@{WATCH_ID}>", uid=999111222)
+        self.assertIn("Only Lynx", out)
+        self.assertEqual(self.rest.role_added, [])
+
+    def test_grant_confers_the_owner_tier(self):
+        self.assertEqual(self.engine.tier_of(WATCH_ID, set()), "user")
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self.assertEqual(self.engine.tier_of(WATCH_ID, set()), "owner")
+
+    def test_second_grant_revokes_the_first(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self._run(f"+Temp Ownership <@{ARCEUS_ID}>")
+        self.assertIn((WATCH_ID, ROLE_CO_OWNER), self.rest.role_removed)
+        self.assertFalse(self.engine.tempown.active(WATCH_ID))
+        self.assertTrue(self.engine.tempown.active(ARCEUS_ID))
+
+    def test_expiry_removes_the_role(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self._expire()
+        revoked = self.engine.tempown.sweep()
+        self.assertIsNotNone(revoked)
+        self.assertIn((WATCH_ID, ROLE_CO_OWNER), self.rest.role_removed)
+        self.assertEqual(self.engine.tier_of(WATCH_ID, set()), "user")
+
+    def test_sweep_does_nothing_before_the_deadline(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self.assertIsNone(self.engine.tempown.sweep())
+        self.assertTrue(self.engine.tempown.active(WATCH_ID))
+
+    def test_grant_survives_a_restart_with_its_deadline(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        deadline = self.engine.tempown.grant.expires_at
+
+        store = Store(Path(self.tmp.name) / "state.json")
+        store.load()
+        rest = FakeRest()
+        engine = Engine(rest, store, Codebook())
+        self.assertTrue(engine.tempown.active(WATCH_ID))
+        self.assertAlmostEqual(engine.tempown.grant.expires_at, deadline, places=1)
+
+    def _expire(self):
+        """Push the stored deadline into the past, as time passing would."""
+        grant = self.engine.tempown.grant
+        grant.expires_at = time.time() - 1
+        self.engine.tempown._save(grant)
+
+    def test_expired_grant_is_not_active_after_a_restart(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self._expire()
+
+        store = Store(Path(self.tmp.name) / "state.json")
+        store.load()
+        engine = Engine(FakeRest(), store, Codebook())
+        self.assertFalse(engine.tempown.active(WATCH_ID))
+        self.assertEqual(engine.tier_of(WATCH_ID, set()), "user")
+
+    def test_end_takes_it_back(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        out = self._run("+Temp Ownership end")
+        self.assertIn("removed", out)
+        self.assertFalse(self.engine.tempown.active(WATCH_ID))
+
+    def test_status_reports_the_remaining_time(self):
+        self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        out = self._run("+Temp Ownership status")
+        self.assertIn("temporary ownership", out)
+        self.assertIn("left", out)
+
+    def test_cannot_grant_to_the_bot(self):
+        out = self._run(f"+Temp Ownership <@{BOT_ID}>")
+        self.assertIn("cannot own", out)
+        self.assertEqual(self.rest.role_added, [])
+
+    def test_discord_refusal_is_reported(self):
+        self.rest.status = 403
+        out = self._run(f"+Temp Ownership <@{WATCH_ID}>")
+        self.assertIn("refused", out)
+        self.assertFalse(self.engine.tempown.active(WATCH_ID))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
@@ -461,29 +577,27 @@ class OpsChannelTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_channel_is_gated_by_one_role(self):
-        """Access is a single role, not per-member grants.
-
-        Discord's Administrator permission ignores channel overwrites, so a
-        member-level allow list cannot keep an admin out. Denying @everyone and
-        allowing only the gate role is the enforceable pattern.
-        """
+    def test_only_the_three_members_are_allowed(self):
+        """Access is exactly three member overwrites - no role is involved."""
         self.assertEqual(len(self.rest.created_channels), 1)
         rows = {int(o["id"]): o for o in self.rest.created_channels[0]["overwrites"]}
         self.assertEqual(rows[GUILD_ID]["deny"], str(1 << 10 | 1 << 11))
-        self.assertEqual(rows[BOT_ID]["allow"], str(1 << 10 | 1 << 11 | 1 << 16 | 1 << 15 | 1 << 6))
-        self.assertEqual(rows[self.engine.ops.role_id]["allow"], str(1 << 10 | 1 << 11 | 1 << 16 | 1 << 15 | 1 << 6))
-        # Operators get in via the role, never via a per-member grant.
-        for user_id in (OWNER_ID, ARCEUS_ID, LYNX_ID, WATCH_ID):
-            self.assertNotIn(user_id, rows)
+        allowed = {OWNER_ID, ARCEUS_ID, LYNX_ID, BOT_ID}
+        for user_id in allowed:
+            self.assertEqual(rows[user_id]["type"], 1, "must be a MEMBER overwrite")
+            self.assertEqual(rows[user_id]["allow"],
+                             str(1 << 10 | 1 << 11 | 1 << 16 | 1 << 15 | 1 << 6))
+            self.assertEqual(rows[user_id]["deny"], "0")
+        # Nothing else: no role overwrite, and Dyllan is not present.
+        self.assertEqual(set(rows), allowed | {GUILD_ID})
+        self.assertNotIn(WATCH_ID, rows)
+        for row in rows.values():
+            if int(row["id"]) != GUILD_ID:
+                self.assertEqual(row["type"], 1, "no role overwrites at all")
 
-    def test_access_role_is_created_and_granted_to_operators(self):
-        self.assertEqual(len(self.rest.created_roles), 1)
-        self.assertEqual(self.rest.created_roles[0]["name"], "ops-access")
-        self.assertEqual(self.rest.created_roles[0]["permissions"], "0")
-        granted = {uid for uid, rid in self.rest.role_added if rid == self.engine.ops.role_id}
-        self.assertEqual(granted, {OWNER_ID, ARCEUS_ID, LYNX_ID})
-        self.assertNotIn(WATCH_ID, granted)
+    def test_no_access_role_is_created(self):
+        self.assertEqual(self.rest.created_roles, [])
+        self.assertEqual(self.rest.role_added, [])
 
     def test_ensure_reuses_an_existing_channel(self):
         first = self.engine.ensure_ops()
@@ -494,9 +608,15 @@ class OpsChannelTests(unittest.TestCase):
     def test_lock_reasserts_every_overwrite(self):
         self.rest.overwrites.clear()
         self.engine.ops._lock()
-        self.assertIn((self.cid, BOT_ID), self.rest.overwrites)
-        self.assertIn((self.cid, self.engine.ops.role_id), self.rest.overwrites)
-        self.assertIn((self.cid, GUILD_ID), self.rest.overwrites)
+        for user_id in (OWNER_ID, ARCEUS_ID, LYNX_ID, BOT_ID, GUILD_ID):
+            self.assertIn((self.cid, user_id), self.rest.overwrites)
+
+    def test_lock_strips_a_stray_grant(self):
+        """A manual grant must not survive the next lock."""
+        self.rest.put_overwrite(self.cid, 999888777, 1, str(1 << 10), "0")
+        self.engine.ops._lock()
+        rows = self.rest.channel_rows_by_id[self.cid]["permission_overwrites"]
+        self.assertNotIn(999888777, {int(o["id"]) for o in rows})
 
     def test_operator_may_post_in_the_channel(self):
         self.engine.on_message({
@@ -561,9 +681,9 @@ class OpsChannelTests(unittest.TestCase):
         self.rest.members[424242] = {"roles": []}
         self.assertFalse(self.engine.ops.can_view(424242))
 
-    def test_can_view_allows_the_gate_role(self):
-        self.rest.members[424242] = {"roles": [str(self.engine.ops.role_id)]}
-        self.assertTrue(self.engine.ops.can_view(424242))
+    def test_can_view_allows_an_allow_listed_member(self):
+        self.rest.members[LYNX_ID] = {"roles": []}
+        self.assertTrue(self.engine.ops.can_view(LYNX_ID))
 
     def test_can_view_short_circuits_on_administrator(self):
         self.rest.role_rows.append(

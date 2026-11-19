@@ -30,6 +30,7 @@ from .config import (
 from .log import log, stats
 from .moderation import Moderator
 from .ops import OpsChannel
+from .tempown import TempOwnership
 from .rest import Rest, RestError
 from .store import Store
 
@@ -58,6 +59,7 @@ class Engine:
         self._member_roles: dict[int, set[int]] = {}
         self.channels = _tracked_channels()
         self.ops = OpsChannel(rest, store)
+        self.tempown = TempOwnership(rest, store)
         if self.ops.channel_id:
             self.channels.add(self.ops.channel_id)
         from . import cmd_impl  # local import keeps the registry wiring in one place
@@ -67,6 +69,8 @@ class Engine:
     # -- identity ---------------------------------------------------------
     def tier_of(self, user_id: int, roles: set[int]) -> str:
         if user_id in (OWNER_ID, LYNX_ID, ARCEUS_ID):
+            return "owner"
+        if self.tempown.active(user_id):
             return "owner"
         if roles & set(OPERATOR_ROLES):
             return "owner"
@@ -387,6 +391,10 @@ class Engine:
             suggestion = self.registry.suggest(command.name)
             hint = f" Did you mean `{PREFIX}{suggestion}`?" if suggestion else ""
             self.rest.reply(channel_id, message_id, f"Unknown command.{hint}")
+            return
+        if spec.only_user is not None and user_id != spec.only_user:
+            self.rest.reply(channel_id, message_id, "Only Lynx can run that command.")
+            stats.bump("denied")
             return
         if TIER_ORDER[self.tier_of(user_id, roles)] > TIER_ORDER[spec.tier]:
             self.rest.reply(channel_id, message_id, "You do not have permission for that.")
