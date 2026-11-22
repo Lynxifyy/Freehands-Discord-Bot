@@ -265,20 +265,46 @@ class ApiClient(var baseUrl: String, var token: String) {
     }
 
     /**
-     * Trades a six-character code from Discord for a device token.
+     * Starts the device-authorization flow and returns the code to display.
      *
-     * This is the only unauthenticated call: the code is the credential, and
-     * it can only have come from an operator running `+pair` in the server.
+     * The code is not a credential: it only identifies this pending request.
+     * It has to be approved in Discord by an operator, and the resulting
+     * device token is bound to *that* account, which is what makes "this phone
+     * is Lynx" a claim the server can actually verify.
      */
-    suspend fun pair(code: String, deviceName: String, model: String = ""): String =
+    suspend fun openPairing(deviceName: String, model: String = ""): String =
         withContext(Dispatchers.IO) {
         val body = JSONObject()
-            .put("action", "claim")
-            .put("code", code)
+            .put("action", "open")
             .put("name", deviceName)
-            // Build.MODEL is stable per hardware model; the display name is not.
             .put("model", model)
             .toString()
+        val o = JSONObject(read(pairConn(body)))
+        o.optString("code").ifBlank { throw IOException("no pairing code returned") }
+    }
+
+    /**
+     * One poll of a pending pairing. Returns the token once an operator has
+     * approved the code in Discord, or null while it is still waiting.
+     */
+    suspend fun pollPairing(code: String): Pair<String, String?>? =
+        withContext(Dispatchers.IO) {
+        val body = JSONObject().put("action", "poll").put("code", code).toString()
+        val o = JSONObject(read(pairConn(body)))
+        when (o.optString("status")) {
+            "approved" -> {
+                val token = o.optString("token")
+                if (token.isBlank()) throw IOException("approval carried no token")
+                // The verified account travels with the approval so the app can
+                // show who it is acting as without a second round trip.
+                val who = o.optJSONObject("identity")?.optString("label").orEmpty()
+                token to who.ifBlank { null }
+            }
+            else -> null
+        }
+    }
+
+    private fun pairConn(body: String): HttpURLConnection {
         val c = URL(baseUrl.trimEnd('/') + "/api/pair").openConnection() as HttpURLConnection
         c.requestMethod = "POST"
         c.connectTimeout = 8000
@@ -286,8 +312,7 @@ class ApiClient(var baseUrl: String, var token: String) {
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         c.outputStream.use { it.write(body.toByteArray()) }
-        val o = JSONObject(read(c))
-        o.optString("token").ifBlank { throw IOException("pairing returned no token") }
+        return c
     }
 
     suspend fun power(action: String): Boolean = withContext(Dispatchers.IO) {

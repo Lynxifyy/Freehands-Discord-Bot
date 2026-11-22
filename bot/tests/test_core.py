@@ -15,7 +15,7 @@ from freehands.codebook import DEFAULT_CODES, Codebook, render_alert
 from freehands.commands import Registry, Spec, parse, user_id_from
 from freehands.config import Settings
 from freehands.store import Store
-from freehands.vault import SALT, mask, unmask
+from freehands.vault import MissingToken, SALT, load_token, mask, unmask
 
 
 class CodeSenseTests(unittest.TestCase):
@@ -219,16 +219,51 @@ class VaultTests(unittest.TestCase):
         fragments = mask(token)
         self.assertEqual(unmask(tuple(fragments), SALT), token)
 
-    def test_embedded_token_shape(self):
-        decoded = unmask()
-        self.assertEqual(len(decoded.split(".")), 3)
-        self.assertTrue(decoded.split(".")[0].isdigit() or decoded.split(".")[0])
+    def test_no_embedded_token_is_shipped(self):
+        """A committed blob is a published credential, however it is encoded."""
+        with self.assertRaises(MissingToken):
+            unmask()
+
+    def test_load_token_prefers_the_environment(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"FH_TOKEN": "from-env"}, clear=False):
+            self.assertEqual(load_token(), "from-env")
+
+    def test_load_token_reads_the_gitignored_file(self):
+        import os
+        from unittest import mock
+
+        from freehands import vault
+
+        tmp = Path(tempfile.mkdtemp()) / ".token"
+        tmp.write_text("from-file\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(vault, "_candidates", return_value=[tmp]):
+                self.assertEqual(load_token(), "from-file")
+
+    def test_load_token_refuses_to_invent_one(self):
+        import os
+        from unittest import mock
+
+        from freehands import vault
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(vault, "_candidates", return_value=[]):
+                with self.assertRaises(MissingToken):
+                    load_token()
 
     def test_no_plaintext_token_in_source_tree(self):
+        """Nothing under freehands/ should look like a Discord bot token."""
+        import re
+
         root = Path(__file__).resolve().parent.parent / "freehands"
-        needle = unmask().split(".")[1]
+        pattern = re.compile(r"[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,40}")
         for path in root.glob("*.py"):
-            self.assertNotIn(needle, path.read_text(encoding="utf-8"), path.name)
+            self.assertIsNone(
+                pattern.search(path.read_text(encoding="utf-8")), path.name
+            )
 
 
 class StoreTests(unittest.TestCase):

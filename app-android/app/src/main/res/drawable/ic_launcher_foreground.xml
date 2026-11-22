@@ -1,6 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Freehands mark: three forward-slanted bars.
+
+  Matches the geometry drawn by BrandMark() in ui/Theme.kt, on the same 108-unit
+  viewport, so the launcher icon and the in-app mark are the same shape. Bars
+  are inside the 66dp adaptive-icon safe zone, so no launcher mask clips them.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#FFFFFF"
-        android:pathData="M38,42 h32 a4,4 0 0 1 4,4 v18 a4,4 0 0 1 -4,4 h-18 l-8,8 v-8 h-6 a4,4 0 0 1 -4,-4 v-18 a4,4 0 0 1 4,-4 z" />
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF" android:pathData="M28,38 L52,38 L49,46 L25,46 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M34,51 L66,51 L63,59 L31,59 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M40,64 L78,64 L75,72 L37,72 Z" />
 </vector>

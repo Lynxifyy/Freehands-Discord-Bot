@@ -124,6 +124,129 @@ def _pair_allowed(addr: str) -> bool:
     return True
 
 
+AUTHORIZE_HTML = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Freehands - authorize this phone</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 28px 22px calc(28px + env(safe-area-inset-bottom));
+    background: #0b0d14; color: #f2f4ff;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; justify-content: center;
+    min-height: 100vh; box-sizing: border-box;
+  }
+  .mark { font-size: 26px; font-weight: 700; letter-spacing: 3px; }
+  .sub { color: #8b93ad; font-size: 12px; margin-bottom: 28px; }
+  .label { color: #8b93ad; font-size: 10px; letter-spacing: 1.2px; margin-bottom: 8px; }
+  .code {
+    font: 700 30px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 8px; color: #7c8bff; margin: 10px 0 6px;
+  }
+  .hint { color: #8b93ad; font-size: 12px; }
+  .status {
+    margin-top: 22px; padding: 12px 14px; border-radius: 12px;
+    background: #151a26; border: 1px solid #232b3d; font-size: 13px;
+  }
+  .ok { border-color: #2c6e49; background: #10251a; }
+  .bad { border-color: #6e2c2c; background: #251010; }
+  button {
+    margin-top: 18px; width: 100%; padding: 14px; border: 0; border-radius: 12px;
+    background: #5865f2; color: #fff; font-size: 15px; font-weight: 600;
+  }
+  button[disabled] { background: #2b3350; color: #8b93ad; }
+  .who { margin-top: 14px; font-size: 13px; color: #8b93ad; }
+</style></head>
+<body>
+  <div class="mark">FREEHANDS</div>
+  <div class="sub">Authorize this phone</div>
+  <div class="label">CODE</div>
+  <div class="code" id="code">------</div>
+  <div class="hint">In Discord, run <b>+pair CODE</b>. Approval has to happen
+  there, because that is where the bot can verify who you are.</div>
+  <div class="status" id="status">Waiting for approval&hellip;</div>
+  <div class="who" id="who"></div>
+  <button id="again" disabled onclick="start()">Get a new code</button>
+<script>
+let code = null, timer = null;
+const statusEl = document.getElementById('status');
+const codeEl = document.getElementById('code');
+const whoEl = document.getElementById('who');
+const again = document.getElementById('again');
+
+async function api(body) {
+  const res = await fetch('/api/pair', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return {ok: res.ok, data: await res.json().catch(() => ({}))};
+}
+
+async function start() {
+  again.disabled = true;
+  clearInterval(timer);
+  statusEl.className = 'status';
+  statusEl.textContent = 'Requesting a code\u2026';
+  const r = await api({action: 'open', name: 'webview'});
+  if (!r.ok || !r.data.code) {
+    statusEl.className = 'status bad';
+    statusEl.textContent = 'Could not reach the bot. Is it running?';
+    again.disabled = false;
+    return;
+  }
+  code = r.data.code;
+  codeEl.textContent = code;
+  statusEl.textContent = 'Waiting for approval\u2026';
+  timer = setInterval(check, 2000);
+}
+
+async function check() {
+  if (!code) return;
+  const r = await api({action: 'poll', code: code});
+  if (!r.ok) {
+    clearInterval(timer);
+    statusEl.className = 'status bad';
+    statusEl.textContent = 'This code expired. Get a new one.';
+    again.disabled = false;
+    return;
+  }
+  if (r.data.status === 'approved') {
+    clearInterval(timer);
+    statusEl.className = 'status ok';
+    statusEl.textContent = 'Approved. Return to the app.';
+    const id = r.data.identity || {};
+    whoEl.textContent = id.label ? ('Signed in as ' + id.label) : '';
+    again.disabled = false;
+    // The app reads this to pick the token up without a second flow.
+    window.FreehandsPairing = {token: r.data.token, identity: id};
+    // The page does not navigate after approval, so `onPageFinished` has
+    // already fired and will not fire again. Push the result to the app
+    // instead of waiting to be asked for it.
+    if (window.FreehandsAndroid && window.FreehandsAndroid.onPaired) {
+      window.FreehandsAndroid.onPaired(JSON.stringify(window.FreehandsPairing));
+    }
+  }
+}
+
+start();
+</script>
+</body></html>
+"""
+
+
+def _oauth_configured() -> bool:
+    """True when a real Discord OAuth app is set up for this deployment.
+
+    A client secret cannot be shipped in a public repository, so the authorize
+    page works as a device-code page by default and upgrades to full Discord
+    sign-in only when the operator supplies a secret in the environment.
+    """
+    return bool(os.environ.get("FH_DISCORD_CLIENT_ID")
+                and os.environ.get("FH_DISCORD_CLIENT_SECRET"))
+
+
 def _is_bot(pid: int) -> bool:
     """True only when `pid` is really this bot.
 
@@ -323,6 +446,23 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args) -> None:
         pass
 
+    def _send_html(self, status: int, html: str) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # The page is self-contained: no scripts, styles or frames from
+        # anywhere else, so a strict policy costs nothing and blocks injected
+        # markup from phoning home.
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send(self, status: int, payload: Any) -> None:
         body = json.dumps(payload).encode()
         self.send_response(status)
@@ -378,6 +518,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/version":
             # Public: the app checks for updates before it is paired.
             return self._send(200, _latest_release())
+        if path in ("/authorize", "/authorize/"):
+            # Public, and deliberately so: it is the page a not-yet-paired
+            # phone opens. It shows only a code this process just minted.
+            return self._send_html(200, AUTHORIZE_HTML)
+        if path == "/api/auth-info":
+            return self._send(200, {"oauth": _oauth_configured()})
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
         if path == "/api/power":
@@ -400,11 +546,15 @@ class Handler(BaseHTTPRequestHandler):
             if not _pair_allowed(self.client_address[0]):
                 return self._send(429, {"error": "too many attempts, wait a minute"})
             body = self._body()
-            # Only claiming is reachable from outside. Opening a code stays in
-            # Discord, so a code can only come from an operator running +pair;
-            # otherwise anyone could mint codes and phish one out of you.
-            if str(body.get("action") or "").lower() != "claim":
-                return self._send(400, {"error": "action must be claim"})
+            action = str(body.get("action") or "").lower()
+            # `open` and `poll` are how a phone that is showing its own screen
+            # gets a code. Neither can grant access: `open` only mints a code
+            # that has no identity attached, and `poll` returns nothing until
+            # an operator approves that code inside Discord. The code is shown
+            # on the operator's own phone, so it never crosses an untrusted
+            # channel the way a code sent by DM would.
+            if action not in ("open", "poll", "claim"):
+                return self._send(400, {"error": "unknown action"})
             # The bot cannot see the client: it listens on loopback. The real
             # address is stamped here so `+devices` can report where a phone
             # paired from. It is advisory only and never used for auth.

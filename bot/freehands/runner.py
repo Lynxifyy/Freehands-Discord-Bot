@@ -39,11 +39,10 @@ def prime(engine: Engine) -> None:
     except RestError as exc:
         log.warning("role bootstrap failed: %s", exc)
     engine.mod.seed_known_bans()
-    try:
-        channel_id = engine.ensure_ops()
-        log.info("ops channel ready (%s)", channel_id)
-    except RestError as exc:
-        log.error("ops channel unavailable: %s", exc)
+    # The ops channel is created on demand, the first time an operator code or
+    # `+ops` needs it. Making it at boot left an empty channel in the server
+    # from the moment the bot started, which is a visible hint that nothing
+    # was happening.
     engine.tempown.start_sweeper()
     if engine.tempown.sweep():
         log.info("an expired temporary-ownership grant was reclaimed at startup")

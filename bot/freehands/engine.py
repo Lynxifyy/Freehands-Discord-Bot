@@ -436,14 +436,22 @@ class Engine:
                      code.number, code.title, user_id)
             return True
 
-        # Sensitive codes go to the private channel only; if it does not exist
-        # yet the alert still has to land somewhere, so it falls back to open
-        # chat with a note instead of disappearing.
+        # Sensitive codes go to the private channel only. The channel is made
+        # here, on first need, rather than at startup: an empty ops channel
+        # sitting in the server is a hint that the bot is idle, and a code is
+        # exactly the moment it stops being idle. If creation fails the alert
+        # still falls back to open chat with a note instead of disappearing.
         target = MAIN_CHAT_ID
-        if code.ops and self.ops.channel_id:
-            target = self.ops.channel_id
-        elif code.ops:
-            body += "\n\n_No ops channel yet - run `+ops create`._"
+        if code.ops:
+            if not self.ops.channel_id:
+                try:
+                    self.ensure_ops()
+                except RestError as exc:
+                    log.error("ops channel could not be created: %s", exc)
+            if self.ops.channel_id:
+                target = self.ops.channel_id
+            else:
+                body += "\n\n_No ops channel yet - run `+ops create`._"
         try:
             self.rest.send(target, body, allowed_mentions=mentions)
         except RestError as exc:

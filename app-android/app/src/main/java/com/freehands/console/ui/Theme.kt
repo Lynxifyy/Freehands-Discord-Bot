@@ -1,6 +1,7 @@
 package com.freehands.console.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -31,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -152,7 +154,13 @@ fun SectionTitle(text: String, trailing: String? = null) {
     }
 }
 
-/** The Freehands mark, drawn small: a rounded badge with a hand glyph. */
+/**
+ * The Freehands mark: three slanted bars that read as forward motion.
+ *
+ * Drawn rather than shipped as a glyph because the previous version used a
+ * raised-hand emoji, which renders differently on every device, cannot be
+ * tinted, and is not the brand. The same geometry is the launcher icon.
+ */
 @Composable
 fun BrandMark(size: Int = 30, modifier: Modifier = Modifier) {
     Box(
@@ -168,10 +176,26 @@ fun BrandMark(size: Int = 30, modifier: Modifier = Modifier) {
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            "\u270B", color = Color.White,
-            fontSize = (size * 0.55f).sp, fontWeight = FontWeight.Bold,
-        )
+        Canvas(Modifier.fillMaxSize()) {
+            // Proportions match res/drawable/ic_launcher_foreground.xml, which
+            // uses a 108-unit viewport.
+            val u = this.size.minDimension / 108f
+            val bars = listOf(
+                listOf(28f, 38f, 52f, 38f, 49f, 46f, 25f, 46f),
+                listOf(34f, 51f, 66f, 51f, 63f, 59f, 31f, 59f),
+                listOf(40f, 64f, 78f, 64f, 75f, 72f, 37f, 72f),
+            )
+            for (b in bars) {
+                val path = Path().apply {
+                    moveTo(b[0] * u, b[1] * u)
+                    lineTo(b[2] * u, b[3] * u)
+                    lineTo(b[4] * u, b[5] * u)
+                    lineTo(b[6] * u, b[7] * u)
+                    close()
+                }
+                drawPath(path, Color.White)
+            }
+        }
     }
 }
 

@@ -103,7 +103,7 @@ fun OwnerPowersDialog(
                         .background(SheetInk),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("\u26A1", fontSize = 15.sp)
+                    Text("OP", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Danger)
                 }
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
@@ -205,7 +205,7 @@ private fun RefusedPanel(onLoad: () -> Unit) {
         Modifier.fillMaxWidth().padding(vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("\u26BF", fontSize = 26.sp)
+        Text("!", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Danger)
         Spacer(Modifier.height(8.dp))
         Text(
             "This panel is for Lynx.",
