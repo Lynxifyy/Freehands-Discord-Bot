@@ -23,6 +23,39 @@ from .log import log
 
 USER_AGENT = "DiscordBot (https://github.com/Lynxifyy/Freehands-Discord-Bot, 2.0.0)"
 
+# Discord rejects a message body longer than this with a 400, not a truncation.
+MESSAGE_LIMIT = 2000
+
+
+def split_message(content: str, limit: int = MESSAGE_LIMIT) -> list[str]:
+    """Split `content` into chunks Discord will accept.
+
+    Breaks on line boundaries so a codebook entry or a command listing is never
+    cut mid-line, and only falls back to a hard cut for a single line that is
+    longer than the limit on its own.
+    """
+    if len(content) <= limit:
+        return [content]
+    chunks: list[str] = []
+    current = ""
+    for line in content.split("\n"):
+        # A line too long by itself still has to go out in pieces.
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
 
 class RestError(Exception):
     def __init__(self, status: int, body: str, route: str) -> None:
@@ -137,6 +170,8 @@ class Rest:
         return self.request("GET", "/users/@me")
 
     def send(self, channel_id: int, content: str = "", **extra) -> dict:
+        if len(content) > MESSAGE_LIMIT:
+            return self.send_long(channel_id, content, **extra)[0]
         payload: dict[str, Any] = {
             "allowed_mentions": {"parse": [], "replied_user": False},
         }
@@ -146,6 +181,8 @@ class Rest:
         return self.request("POST", f"/channels/{channel_id}/messages", payload)
 
     def reply(self, channel_id: int, message_id: int, content: str, **extra) -> dict:
+        if len(content) > MESSAGE_LIMIT:
+            return self.send_long(channel_id, content, message_id=message_id, **extra)[0]
         payload: dict[str, Any] = {
             "message_reference": {"message_id": str(message_id), "fail_if_not_exists": False},
             "allowed_mentions": {"parse": [], "replied_user": False},
@@ -154,6 +191,24 @@ class Rest:
             payload["content"] = content
         payload.update(extra)
         return self.request("POST", f"/channels/{channel_id}/messages", payload)
+
+    def send_long(self, channel_id: int, content: str, message_id: int = 0,
+                  **extra) -> list[dict]:
+        """Send `content`, splitting it into messages Discord will accept.
+
+        A message body over 2000 characters is rejected outright with a 400,
+        so any command whose output grows with the codebook or the command
+        list fails for everyone once it passes the limit. Splitting here means
+        a handler can build its whole reply as one string and not care.
+        """
+        chunks = split_message(content, MESSAGE_LIMIT)
+        sent: list[dict] = []
+        for index, chunk in enumerate(chunks):
+            if index == 0 and message_id:
+                sent.append(self.reply(channel_id, message_id, chunk, **extra))
+            else:
+                sent.append(self.send(channel_id, chunk, **extra))
+        return sent
 
     def edit(self, channel_id: int, message_id: int, content: str) -> dict:
         return self.request(

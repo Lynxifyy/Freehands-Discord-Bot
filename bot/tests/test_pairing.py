@@ -159,12 +159,21 @@ class PairCommandTest(unittest.TestCase):
 
     def setUp(self):
         from .test_engine import build_engine
+        from freehands.config import ARCEUS_ID, OWNER_ID
         self.tmp = tempfile.mkdtemp()
         self.engine, self.rest = build_engine(self.tmp)
+        # Pairing verifies the account against the guild, so the operators have
+        # to exist as members the way they do in the real server.
+        self.rest.members[OWNER_ID] = {
+            "user": {"id": str(OWNER_ID), "username": "gllober3_28957"}, "roles": [],
+        }
+        self.rest.members[ARCEUS_ID] = {
+            "user": {"id": str(ARCEUS_ID), "username": "arceus"}, "roles": [],
+        }
 
     def _run(self, text: str, user_id: int = None):
         from freehands.commands import parse
-        from freehands.config import OWNER_ID
+        from freehands.config import OWNER_ID  # noqa: F401
         cmd = parse(text)
         self.assertIsNotNone(cmd, f"{text} did not parse")
         self.engine.dispatch(cmd, user_id or OWNER_ID, 1, 555, set())
@@ -172,28 +181,101 @@ class PairCommandTest(unittest.TestCase):
     def _last(self) -> str:
         return self.rest.replies[-1]["content"]
 
-    def test_pair_without_a_code_issues_one(self):
+    def test_pair_without_a_code_explains_the_flow(self):
         self._run("+pair")
         body = self._last()
-        self.assertIn("Pairing code", body)
-        self.assertEqual(len(self.engine.pairing.pending()), 1)
+        # A code minted in Discord could be photographed and used by anyone,
+        # so the only safe direction is app -> Discord.
+        self.assertIn("Connect to Discord", body)
+        self.assertEqual(len(self.engine.pairing.pending()), 0)
 
-    def test_the_issued_code_can_be_claimed(self):
-        self._run("+pair")
-        code = self.engine.pairing.pending()[0][0]
+    def test_a_code_from_the_app_is_approved_in_discord(self):
+        from freehands.config import OWNER_ID
+
+        code = self.engine.pairing.open("console")
         self._run(f"+pair {code}")
         self.assertIn("Paired", self._last())
         self.assertEqual(len(self.engine.pairing.devices), 1)
+        device = next(iter(self.engine.pairing.devices.values()))
+        self.assertEqual(device.identity.user_id, str(OWNER_ID))
 
-    def test_the_token_is_shown_exactly_once(self):
-        self._run("+pair")
-        code = self.engine.pairing.pending()[0][0]
+    def test_the_app_polls_the_token_after_approval(self):
+        code = self.engine.pairing.open("console")
+        self.assertEqual(self.engine.pairing.poll(code), {"status": "pending"})
         self._run(f"+pair {code}")
-        token = self.engine.pairing.devices and self._last().split("`")[3]
-        self.assertIsNotNone(self.engine.pairing.verify(token))
-        # Running the same code again must not hand out the token twice.
+        status = self.engine.pairing.poll(code)
+        self.assertEqual(status["status"], "approved")
+        self.assertIsNotNone(self.engine.pairing.verify(status["token"]))
+
+    def test_polling_twice_returns_the_same_token(self):
+        """A dropped response must not cost the phone its credential."""
+        code = self.engine.pairing.open("console")
         self._run(f"+pair {code}")
-        self.assertNotIn("Token, shown once", self._last())
+        first = self.engine.pairing.poll(code)
+        second = self.engine.pairing.poll(code)
+        self.assertEqual(first["token"], second["token"])
+
+    def test_the_phone_reports_itself_when_it_opens_a_code(self):
+        """`+pair` must say what it is approving, or the operator is blind."""
+        code = self.engine.pairing.open(
+            "console", model="Pixel 8", ip="203.0.113.9",
+        )
+        self._run(f"+pair {code}")
+        said = " ".join(r["content"] for r in self.rest.replies)
+        self.assertIn("Pixel 8", said)
+        self.assertIn("203.0.113.9", said)
+        device = next(iter(self.engine.pairing.devices.values()))
+        self.assertEqual(device.model, "Pixel 8")
+
+    def test_a_peek_does_not_consume_the_code(self):
+        code = self.engine.pairing.open("console", model="Pixel 8")
+        peeked = self.engine.pairing.peek(code)
+        self.assertEqual(peeked["model"], "Pixel 8")
+        self.assertEqual(self.engine.pairing.poll(code), {"status": "pending"})
+
+    def test_a_peek_is_refused_once_claimed(self):
+        code = self.engine.pairing.open("console")
+        self._run(f"+pair {code}")
+        self.assertIsNone(self.engine.pairing.peek(code))
+
+    def test_an_unknown_code_cannot_be_peeked(self):
+        self.assertIsNone(self.engine.pairing.peek("ZZZZZZ"))
+
+    def test_the_device_name_survives_into_the_device_record(self):
+        code = self.engine.pairing.open("Lynx's phone")
+        self._run(f"+pair {code}")
+        device = next(iter(self.engine.pairing.devices.values()))
+        self.assertEqual(device.name, "Lynx's phone")
+
+    def test_a_second_approval_cannot_hijack_the_pairing(self):
+        from freehands.config import ARCEUS_ID, OWNER_ID
+
+        code = self.engine.pairing.open("console")
+        self._run(f"+pair {code}")
+        device = next(iter(self.engine.pairing.devices.values()))
+        self.assertEqual(device.identity.user_id, str(OWNER_ID))
+        # Arceus approving the same code must not take the device over.
+        self._run(f"+pair {code}", user_id=ARCEUS_ID)
+        self.assertNotIn("Paired", self._last())
+        self.assertEqual(device.identity.user_id, str(OWNER_ID))
+
+    def test_the_device_is_bound_to_whoever_approved_it(self):
+        from freehands.config import ARCEUS_ID
+
+        code = self.engine.pairing.open("console")
+        self._run(f"+pair {code}", user_id=ARCEUS_ID)
+        device = next(iter(self.engine.pairing.devices.values()))
+        self.assertEqual(device.identity.user_id, str(ARCEUS_ID))
+        self.assertEqual(device.identity.username, "arceus")
+
+    def test_an_account_outside_the_guild_cannot_pair(self):
+        from freehands.config import OWNER_ID
+
+        code = self.engine.pairing.open("console")
+        self.rest.members.pop(OWNER_ID, None)
+        self._run(f"+pair {code}")
+        self.assertIn("not a member", self._last())
+        self.assertEqual(len(self.engine.pairing.devices), 0)
 
     def test_a_bad_code_is_reported_not_silently_ignored(self):
         self._run("+pair ZZZZZZ")
@@ -207,8 +289,7 @@ class PairCommandTest(unittest.TestCase):
     def test_devices_lists_a_paired_console(self):
         from freehands.config import LYNX_ID
 
-        self._run("+pair")
-        code = self.engine.pairing.pending()[0][0]
+        code = self.engine.pairing.open("console")
         self._run(f"+pair {code}")
         self._run("+devices", user_id=LYNX_ID)
         self.assertIn("Paired consoles", self._last())
@@ -223,8 +304,7 @@ class PairCommandTest(unittest.TestCase):
         """The list carries every phone's address, so it is Lynx's alone."""
         from freehands.config import ARCEUS_ID, OWNER_ID, LYNX_ID
 
-        self._run("+pair")
-        self._run(f"+pair {self.engine.pairing.pending()[0][0]}")
+        self._run(f"+pair {self.engine.pairing.open('console')}")
         for other in (OWNER_ID, ARCEUS_ID):
             self._run("+devices", user_id=other)
             self.assertIn("Only Lynx", self._last(), other)
@@ -259,16 +339,14 @@ class PairCommandTest(unittest.TestCase):
         self.assertIn("unknown", self._last())
 
     def test_revoke_all_disconnects_everything(self):
-        self._run("+pair")
-        self._run(f"+pair {self.engine.pairing.pending()[0][0]}")
+        self._run(f"+pair {self.engine.pairing.open('console')}")
         self._run("+revoke all")
         self.assertIn("Revoked", self._last())
         self.assertEqual(len(self.engine.pairing.devices), 0)
 
     def test_revoking_one_device_leaves_the_others(self):
         for _ in range(2):
-            self._run("+pair")
-            self._run(f"+pair {self.engine.pairing.pending()[0][0]}")
+            self._run(f"+pair {self.engine.pairing.open('console')}")
         first = sorted(self.engine.pairing.devices)[0]
         self._run(f"+revoke {first}")
         self.assertEqual(len(self.engine.pairing.devices), 1)

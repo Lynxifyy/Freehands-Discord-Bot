@@ -18,6 +18,8 @@ from typing import Any, Callable
 
 from .command_docs import detail_for
 from .config import GUILD_ID
+from .devices import identify
+from .pairing import Identity
 from .log import log
 from .people import can_target, people as build_people
 
@@ -73,7 +75,7 @@ class BotApi:
             "checks": results,
         }
 
-    def status(self) -> dict[str, Any]:
+    def status(self, actor: str = "") -> dict[str, Any]:
         e = self.engine
         s = e.settings
         return {
@@ -82,7 +84,17 @@ class BotApi:
             "settings": s.to_json(),
             "stats": {"messages": 0, "events": e.events.counts()},
             "gateway": True,
+            "identity": self._identity_of(actor),
         }
+
+    def _identity_of(self, user_id: str) -> dict[str, Any] | None:
+        """The verified account behind a device, for the app to display."""
+        if not user_id:
+            return None
+        for device in self.engine.pairing.devices.values():
+            if device.identity.user_id == user_id:
+                return device.identity.to_json()
+        return None
 
     def log_rows(self, limit: int, after: int) -> dict[str, Any]:
         rows = self.engine.events.recent(limit=limit, after=after)
@@ -103,45 +115,75 @@ class BotApi:
         return {"commands": out}
 
     def pair(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        """Open or claim a pairing code for a device.
+        """The device-authorization flow for the console app.
 
-        Called by the supervisor on behalf of the app, never by a browser:
-        the loopback port is not reachable from outside this machine.
+        Three actions, all reachable before the app has a token:
+
+        * `open`  - the app asks for a code and displays it.
+        * `poll`  - the app waits to see whether a human approved it.
+        * `claim` - retained for the older path; binds an already-verified
+                    account directly.
+
+        Approval itself happens in Discord, in `+pair`, because that is the
+        only place the bot can see who is asking. Nothing here accepts an
+        identity from the app: an app that could name its own account could
+        claim to be anyone.
         """
         action = str(body.get("action") or "").lower()
+
         if action == "open":
-            code = self.engine.pairing.open(str(body.get("name") or "console"))
-            log.info("pairing code opened for console")
-            return 200, {"ok": True, "code": code, "expires_in": 300}
+            name = str(body.get("name") or "console")
+            model = str(body.get("model") or "").strip()
+            ip = str(body.get("ip") or "").strip()
+            code = self.engine.pairing.open(name, model=model, ip=ip)
+            log.info("pairing code opened for %s", name)
+            return 200, {"ok": True, "code": code, "expires_in": 300,
+                         "instructions": "Run +pair " + code + " in Discord."}
+
+        if action == "poll":
+            status = self.engine.pairing.poll(str(body.get("code") or ""))
+            if status is None:
+                return 404, {"error": "unknown or expired code"}
+            return 200, status
+
         if action == "claim":
             # The address is forwarded by the supervisor, which is the only
             # process that sees the real client. It is recorded, not trusted:
             # a VPN or mobile carrier will place the phone elsewhere.
-            from .devices import identify
             from .geolocate import describe
 
             ip = str(body.get("ip") or "").strip()
             model = str(body.get("model") or "").strip()
-            # A known team console stores no address, so skip the lookup
-            # entirely rather than look up something that will be discarded.
             known = identify(model, name=str(body.get("name") or ""))
+            raw_identity = body.get("identity")
+            identity = Identity.from_json(raw_identity) if raw_identity else None
+            if identity is None or not identity.user_id:
+                # Without a verified identity there is nothing for the console
+                # to act as, and trusting one supplied by the app would defeat
+                # the point of pairing through Discord.
+                return 400, {"error": "approve in Discord with +pair <code>"}
             token = self.engine.pairing.claim(
                 str(body.get("code") or ""),
+                paired_by=identity.user_id,
                 name=str(body.get("name") or ""),
                 ip=ip,
                 location="" if known else (describe(ip) if ip else ""),
                 app_version=str(body.get("app_version") or ""),
                 model=model,
+                identity=identity,
             )
             if token is None:
                 return 404, {"error": "unknown or expired code"}
             device = max(self.engine.pairing.devices.values(), key=lambda d: d.created)
-            return 200, {"ok": True, "token": token, "device": device.id}
-        return 400, {"error": "action must be open or claim"}
+            return 200, {"ok": True, "token": token, "device": device.id,
+                         "identity": identity.to_json()}
+        return 400, {"error": "action must be open, poll or claim"}
 
     def devices(self) -> dict[str, Any]:
         return {"devices": [
-            {"id": d.id, "name": d.name, "created": d.created, "last_seen": d.last_seen}
+            {"id": d.id, "name": d.name, "created": d.created,
+             "last_seen": d.last_seen, "paired_by": d.paired_by,
+             "identity": d.identity.to_json()}
             for d in sorted(self.engine.pairing.devices.values(), key=lambda d: d.created)
         ]}
 
@@ -187,7 +229,12 @@ class BotApi:
         """
         bearer = (handler.headers.get("Authorization") or "").replace("Bearer ", "").strip()
         device = self.engine.pairing.verify(bearer)
-        return str(device.paired_by) if device is not None else ""
+        if device is None:
+            return ""
+        # The verified identity wins over the legacy field: `paired_by` records
+        # who approved a pairing, which after the device-grant change is the
+        # same account, but only `identity` was checked against the guild.
+        return device.identity.user_id or str(device.paired_by)
 
     def people(self) -> dict[str, Any]:
         """Who can reach the bot, strongest first, for the loop dropdown."""
@@ -275,7 +322,7 @@ class BotApi:
                             query[k] = v
                 try:
                     if path == "/api/status":
-                        return _json(self, 200, api.status())
+                        return _json(self, 200, api.status(api._actor(self)))
                     if path == "/api/log":
                         return _json(self, 200, api.log_rows(
                             int(query.get("limit", 100)), int(query.get("after", 0))))

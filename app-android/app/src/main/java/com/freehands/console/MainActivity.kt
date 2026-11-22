@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.border
@@ -79,6 +78,7 @@ import com.freehands.console.ui.Hairline
 import com.freehands.console.ui.SettingsTab
 import com.freehands.console.ui.SplashScreen
 import com.freehands.console.ui.StatusPill
+import com.freehands.console.ui.WebMenu
 
 private val scheme = darkColorScheme(
     primary = Brand,
@@ -177,11 +177,43 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
         }
     }
 
+    // The in-app browser. Opening it is what the pairing button does, and the
+    // same screen serves the account page from the settings menu, so a user
+    // never has to leave the app to finish either job.
+    var web by rememberSaveable { mutableStateOf<String?>(null) }
+
     if (!state.configured) {
+        if (web != null) {
+            WebMenu(
+                url = web!!,
+                title = "Authorize this phone",
+                onClose = { web = null; vm.cancelPairing() },
+                onPaired = { token, who ->
+                    web = null
+                    vm.adoptPairing(token, who)
+                },
+            )
+            return
+        }
         PairScreen(
             pairing = state.pairing,
             error = state.pairError,
-            onPair = vm::pair,
+            onConnect = { web = vm.authorizeUrl() },
+        )
+        return
+    }
+
+    if (web != null) {
+        WebMenu(
+            url = web!!,
+            title = "Account",
+            onClose = { web = null },
+            onPaired = { _, _ -> web = null },
+            onNavigate = { target ->
+                runCatching {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
+                }
+            },
         )
         return
     }
@@ -297,6 +329,8 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                             powerNotice = state.notice,
                             onOpenPowers = vm::loadPowers,
                             onSetPower = { k, on, c -> vm.setPower(k, on, c) },
+                            identity = state.identity,
+                            onOpenAccount = { web = vm.accountUrl() },
                         )
                     }
                 }
@@ -360,9 +394,11 @@ private fun Header(running: Boolean, live: Boolean, botName: String, error: Stri
 }
 
 @Composable
-private fun PairScreen(pairing: Boolean, error: String?, onPair: (String) -> Unit) {
-    var code by remember { mutableStateOf("") }
-
+private fun PairScreen(
+    pairing: Boolean,
+    error: String?,
+    onConnect: () -> Unit,
+) {
     Column(
         Modifier
             .fillMaxSize()
@@ -370,6 +406,8 @@ private fun PairScreen(pairing: Boolean, error: String?, onPair: (String) -> Uni
             .statusBarsPadding(),
         verticalArrangement = Arrangement.Center,
     ) {
+        BrandMark(size = 44)
+        Spacer(Modifier.height(18.dp))
         Text(
             "FREEHANDS", color = Color.White, fontSize = 26.sp,
             fontWeight = FontWeight.Bold, letterSpacing = 3.sp,
@@ -377,63 +415,38 @@ private fun PairScreen(pairing: Boolean, error: String?, onPair: (String) -> Uni
         Text("Operator console", color = Muted, fontSize = 12.sp)
         Spacer(Modifier.height(32.dp))
 
-        Text("PAIR THIS PHONE", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp)
+        Text("CONNECT THIS PHONE", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp)
         Spacer(Modifier.height(10.dp))
         Text(
-            "In Discord, run +pair to get a code. Then type it here.",
+            "The console acts as your Discord account, so the bot has to see " +
+                "the approval come from you. Press Connect and the code appears " +
+                "on the next screen.",
             color = Color.White, fontSize = 13.sp, lineHeight = 19.sp,
-        )
-        Spacer(Modifier.height(16.dp))
-
-        OutlinedTextField(
-            value = code,
-            onValueChange = { raw ->
-                // Accept a pasted code with spaces or dashes; the server
-                // normalises too, this just keeps the field tidy.
-                code = raw.filter { it.isLetterOrDigit() }.uppercase().take(6)
-            },
-            singleLine = true,
-            isError = error != null,
-            placeholder = { Text("ABC123", color = Muted, fontSize = 18.sp) },
-            textStyle = androidx.compose.ui.text.TextStyle(
-                color = Color.White,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 6.sp,
-                fontFamily = FontFamily.Monospace,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Brand, unfocusedBorderColor = PanelAlt,
-                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-            ),
         )
 
         if (error != null) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             Text(error, color = Danger, fontSize = 11.sp, lineHeight = 16.sp)
         }
 
         Spacer(Modifier.height(18.dp))
         Button(
-            onClick = { onPair(code) },
-            enabled = code.length == 6 && !pairing,
+            onClick = onConnect,
+            enabled = !pairing,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Brand),
         ) {
             Text(
-                if (pairing) "Pairing..." else "Pair",
+                if (pairing) "Opening..." else "Connect to Discord",
                 color = Color.White, fontWeight = FontWeight.Bold,
             )
         }
 
         Spacer(Modifier.height(14.dp))
         Text(
-            "This phone gets its own access token. Nothing else needs typing, " +
-                "and you can cut it off later with +revoke in Discord.",
+            "Approval happens inside Discord, where the bot already knows who " +
+                "you are. This phone gets its own token, and +revoke cuts it off.",
             color = Muted, fontSize = 10.sp, lineHeight = 15.sp,
         )
     }

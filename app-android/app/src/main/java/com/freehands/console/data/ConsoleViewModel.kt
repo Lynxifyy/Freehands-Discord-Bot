@@ -18,6 +18,8 @@ data class UiState(
     val configured: Boolean = false,
     val pairing: Boolean = false,
     val pairError: String? = null,
+    /** Verified account this device is paired as, once the server confirms it. */
+    val identity: String? = null,
     val running: Boolean = false,
     val botName: String = "",
     val settings: Map<String, Any> = emptyMap(),
@@ -194,40 +196,36 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(updateDismissed = true)
     }
 
+    /** The bot-served page that runs the whole pairing exchange. */
+    fun authorizeUrl(): String = api.baseUrl.trimEnd('/') + "/authorize"
+
+    /** The account page, for the settings menu. */
+    fun accountUrl(): String = api.baseUrl.trimEnd('/') + "/authorize"
+
     /**
-     * Turns a code from Discord into this device's credential.
+     * Takes a token the in-app browser obtained after approval.
      *
-     * Nothing is typed except the six characters the operator already has on
-     * screen in Discord, and the resulting token is stored on the device only.
+     * The webview publishes the token on the page once the poll sees approval,
+     * so this is the same credential the native flow would have received; it
+     * is stored and the app switches over exactly as if it had polled itself.
      */
-    fun pair(code: String) {
-        val cleaned = code.filter { it.isLetterOrDigit() }.uppercase()
-        if (cleaned.length != 6) {
-            _state.value = _state.value.copy(pairError = "Enter the six-character code from Discord.")
-            return
-        }
-        viewModelScope.launch {
-            _state.value = _state.value.copy(pairing = true, pairError = null)
-            runCatching { api.pair(cleaned, deviceName(), Build.MODEL) }
-                .onSuccess { token ->
-                    prefs.edit()
-                        .putString("base", api.baseUrl)
-                        .putString("token", token)
-                        .apply()
-                    api.token = token
-                    _state.value = _state.value.copy(
-                        configured = true, pairing = false, pairError = null, error = null,
-                    )
-                    refreshCreator()
-                    poll()
-                }
-                .onFailure { e ->
-                    _state.value = _state.value.copy(
-                        pairing = false,
-                        pairError = e.message ?: "Could not pair. Check the code and try again.",
-                    )
-                }
-        }
+    fun adoptPairing(token: String, identity: String?) {
+        prefs.edit()
+            .putString("base", api.baseUrl)
+            .putString("token", token)
+            .apply()
+        api.token = token
+        _state.value = _state.value.copy(
+            configured = true, pairing = false, pairError = null,
+            identity = identity, error = null,
+        )
+        refreshCreator()
+        poll()
+    }
+
+    /** Clears the waiting state, e.g. when the user closes the browser. */
+    fun cancelPairing() {
+        _state.value = _state.value.copy(pairing = false)
     }
 
     /** The phone's own model name, so `+devices` shows something recognisable. */

@@ -79,6 +79,8 @@ fun SettingsTab(
     powerNotice: String? = null,
     onOpenPowers: () -> Unit = {},
     onSetPower: (String, Boolean, String) -> Unit = { _, _, _ -> },
+    identity: String? = null,
+    onOpenAccount: () -> Unit = {},
 ) {
     var confirmRestart by remember { mutableStateOf(false) }
     var powersOpen by remember { mutableStateOf(false) }
@@ -108,7 +110,7 @@ fun SettingsTab(
                         .background(Danger.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("\u26A1", fontSize = 15.sp)
+                    Text("OP", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Danger)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -186,6 +188,37 @@ fun SettingsTab(
         }
 
         Spacer(Modifier.height(18.dp))
+        SectionTitle("Account")
+
+        SurfaceCard {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    identity ?: "Paired console",
+                    color = Color.White, fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "The Discord account this phone acts as, verified by the " +
+                        "bot when it was paired.",
+                    color = Muted, fontSize = 10.sp, lineHeight = 15.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = onOpenAccount,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Brand),
+                ) {
+                    Text(
+                        "Open account page",
+                        color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
         SectionTitle("Process")
 
         SurfaceCard(accent = Danger) {

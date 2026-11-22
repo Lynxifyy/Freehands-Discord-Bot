@@ -79,24 +79,27 @@ No dependencies. Python 3.10+ and the standard library are enough.
 
 | What | Where |
 | --- | --- |
-| Token | `FH_TOKEN` env, then `bot/.token`, then the embedded masked blob |
+| Token | `FH_TOKEN` env, then `bot/.token` (gitignored) |
 | Guild and role IDs | `bot/freehands/config.py` |
 | Codebook | `bot/codes.json` (overrides the built-in table) |
 | Runtime switches | `bot/state.json`, written by `+antiban`, `+mod`, `+codesense` |
 | Log level | `FH_LOG=DEBUG` |
 | Gateway off | `FH_GATEWAY=0` (falls back to REST polling) |
 
-The token is stored XOR-masked and split across four fragments in
-`bot/freehands/vault.py`, so no literal credential exists in the tree.
-Regenerate it with:
+The token lives in `bot/.token`, which is gitignored, or in `FH_TOKEN`. It is
+never committed. An earlier version shipped it obfuscated inside `vault.py`,
+which is not protection: the repository is public, the decoder sat next to the
+blob, and anyone who could read the file could recover the token.
 
 ```bash
-python3 scripts/encode_token.py --from-file bot/.token
-python3 scripts/encode_token.py --check
+python3 scripts/encode_token.py --from-file /path/to/token   # write bot/.token
+python3 scripts/encode_token.py --check                      # confirm it resolves
 ```
 
-Set `FH_TOKEN` in production and keep the embedded blob as the fallback for a
-fresh container.
+If you have an old checkout with the masked blob, `python -m freehands.vault
+--migrate` (run from `bot/`) copies it into `bot/.token` once. Rotate the token
+in the Discord developer portal afterwards, and treat any token that was ever
+in the tree as compromised.
 
 ## Commands
 

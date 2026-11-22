@@ -241,3 +241,87 @@ class ProxyRouteTest(unittest.TestCase):
             with self.subTest(route=route):
                 _, _, token = self._forwarded(route)[0]
                 self.assertEqual(token, "dev-token", f"{route} lost the caller's token")
+
+
+class AuthorizePageTest(unittest.TestCase):
+    """The pairing page is served to a phone that has no credential yet."""
+
+    def test_the_page_shows_the_pair_command(self):
+        html = console_api.AUTHORIZE_HTML
+        self.assertIn("+pair", html)
+        self.assertIn("CODE", html)
+
+    def test_the_page_can_hand_the_token_back_to_the_app(self):
+        # The webview reads this global once approval lands, so the user never
+        # copies a credential by hand.
+        self.assertIn("FreehandsPairing", console_api.AUTHORIZE_HTML)
+
+    def test_the_page_pushes_the_token_to_the_app(self):
+        """The page never navigates, so it must push instead of being polled.
+
+        `onPageFinished` fires before approval, so reading the token there
+        always returned nothing. The page has to call into the app when the
+        operator approves.
+        """
+        html = console_api.AUTHORIZE_HTML
+        self.assertIn("FreehandsAndroid", html)
+        self.assertIn("onPaired", html)
+
+    def test_the_page_keeps_the_global_for_a_reload(self):
+        html = console_api.AUTHORIZE_HTML
+        self.assertIn("window.FreehandsPairing", html)
+
+    def test_the_page_loads_nothing_from_elsewhere(self):
+        """An embedded page that pulls remote assets leaks who is pairing."""
+        import re
+
+        html = console_api.AUTHORIZE_HTML
+        self.assertIsNone(re.search(r'(?:src|href)\s*=\s*["\']https?://', html))
+
+    def test_the_page_talks_only_to_its_own_origin(self):
+        html = console_api.AUTHORIZE_HTML
+        self.assertIn("/api/pair", html)
+        self.assertNotIn("discord.com/api", html)
+
+    def test_oauth_is_reported_as_unavailable_without_a_secret(self):
+        old = {k: os.environ.pop(k, None) for k in (
+            "FH_DISCORD_CLIENT_ID", "FH_DISCORD_CLIENT_SECRET",
+        )}
+        try:
+            self.assertFalse(console_api._oauth_configured())
+        finally:
+            for k, v in old.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_oauth_is_reported_as_available_when_configured(self):
+        old = {k: os.environ.get(k) for k in (
+            "FH_DISCORD_CLIENT_ID", "FH_DISCORD_CLIENT_SECRET",
+        )}
+        os.environ["FH_DISCORD_CLIENT_ID"] = "123"
+        os.environ["FH_DISCORD_CLIENT_SECRET"] = "shh"
+        try:
+            self.assertTrue(console_api._oauth_configured())
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
+class PairEndpointPolicyTest(unittest.TestCase):
+    """`open` and `poll` must be reachable before the app has a token.
+
+    Pairing is how a phone gets its first credential, so requiring one would
+    make the flow impossible. What matters is that neither action can grant
+    access on its own: only a `+pair` inside Discord binds an account.
+    """
+
+    def test_the_public_pair_route_accepts_the_flow_actions(self):
+        source = Path(console_api.__file__).read_text(encoding="utf-8")
+        self.assertIn('"open", "poll", "claim"', source)
+
+    def test_an_unknown_action_is_still_refused(self):
+        source = Path(console_api.__file__).read_text(encoding="utf-8")
+        self.assertIn('"unknown action"', source)

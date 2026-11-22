@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import time
 
-from .config import ALLOWED_OPS, LYNX_ID
+from .config import ALLOWED_OPS, GUILD_ID, LYNX_ID
 from .log import log
+from .pairing import Identity, normalise
+from .people import _name_of, avatar_url
+from .rest import RestError
 
 
 def _age(seconds: float) -> str:
@@ -23,42 +26,95 @@ def _age(seconds: float) -> str:
     return f"{seconds // 3600}h"
 
 
+def _identity_for(engine, user_id: int, roles: set[int]) -> Identity:
+    """Build a verified Identity from the guild, not from anything the app sent.
+
+    The member endpoint is the source of truth: if the account is not in the
+    guild the bot cannot vouch for it, and the claim is refused rather than
+    trusted on the strength of a Discord id alone.
+    """
+    member = None
+    try:
+        member = engine.rest.member(GUILD_ID, int(user_id))
+    except RestError as exc:
+        log.warning("member lookup failed for %s: %s", user_id, exc)
+    if not member:
+        raise LookupError("that account is not a member of this server")
+    username, display, avatar_hash = _name_of(member)
+    member_roles = {int(r) for r in (member.get("roles") or [])} | set(roles)
+    return Identity(
+        user_id=str(user_id),
+        username=username,
+        display_name=display,
+        avatar=avatar_url(str(user_id), avatar_hash),
+        tier=engine.tier_of(user_id, member_roles),
+    )
+
+
 def pair(engine, command, user_id, message_id, channel_id, roles):
-    """`+pair` opens a code, `+pair <code>` claims one for the asking device."""
+    """`+pair <code>` approves a console that is showing a code.
+
+    The app opens the code and displays it; whoever runs this command in
+    Discord is the account the console is bound to. Approval has to happen
+    here because this is the only place the bot already knows who is typing -
+    the app cannot vouch for its own identity.
+    """
     if user_id not in ALLOWED_OPS:
         engine.reply(channel_id, message_id,
                      "Only an operator can pair a console.")
         return
 
     if not command.args:
-        code = engine.pairing.open("console", opened_by=str(user_id))
+        # No code given: explain the flow rather than minting one. A code
+        # issued here could be photographed off the screen and used by anyone,
+        # so the only safe direction is app -> Discord.
         engine.reply(
             channel_id, message_id,
-            f"Pairing code `{code}` — valid for 5 minutes.\n"
-            f"Enter it in the app. Running `+pair` again issues a new code and "
-            f"cancels this one.",
+            "Open the Freehands app and press **Connect to Discord**. It shows "
+            "a code. Run `+pair <code>` with that code to approve this console "
+            "as your account.",
         )
-        log.info("pairing code opened by %s", user_id)
         return
 
-    code = command.args[0]
-    token = engine.pairing.claim(code, paired_by=str(user_id))
+    code = normalise(command.args[0])
+    try:
+        identity = _identity_for(engine, user_id, roles)
+    except LookupError as exc:
+        engine.reply(channel_id, message_id, f"Cannot pair: {exc}.")
+        return
+
+    # Say what is being approved. A code with no device name is exactly the
+    # thing an operator should be suspicious of, so show the details first.
+    pending = engine.pairing.peek(code)
+    if pending is not None:
+        engine.reply(
+            channel_id, message_id,
+            f"Approving **{pending['name']}**"
+            + (f" ({pending['model']})" if pending["model"] else "")
+            + f", code opened {_age(pending['age'])} ago"
+            + (f" from {pending['ip']}" if pending["ip"] else "")
+            + ".",
+        )
+
+    token = engine.pairing.approve(code, identity)
     if token is None:
-        engine.reply(channel_id, message_id,
-                     f"No code `{code.upper()}` waiting. It may have expired — "
-                     f"run `+pair` in the app for a fresh one.")
+        engine.reply(
+            channel_id, message_id,
+            f"No code `{code}` waiting. Codes last five minutes and can only "
+            f"be used once — press Connect to Discord in the app for a fresh one.",
+        )
         return
 
-    device = max(engine.pairing.devices.values(), key=lambda d: d.created)
-    # The token is shown once. Only its hash is stored, so it cannot be
-    # recovered later; losing it means revoking and pairing again.
+    device = engine.pairing.devices[max(
+        engine.pairing.devices, key=lambda d: engine.pairing.devices[d].created)]
     engine.reply(
         channel_id, message_id,
-        f"Paired **{device.name}** (`{device.id}`).\n"
-        f"Token, shown once: `{token}`\n"
+        f"Paired **{device.name}** (`{device.id}`) as **{identity.label}** "
+        f"({identity.tier}).\n"
+        f"The app now has access; no token needs copying. "
         f"`+revoke {device.id}` disconnects it.",
     )
-    log.info("device %s paired by %s", device.id, user_id)
+    log.info("device %s paired as %s (%s)", device.id, identity.label, identity.user_id)
 
 
 def _stamp(seconds: float) -> str:
