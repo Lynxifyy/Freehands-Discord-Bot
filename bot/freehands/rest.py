@@ -253,6 +253,24 @@ class Rest:
             "DELETE", f"/guilds/{guild_id}/members/{user_id}/roles/{role_id}", reason=reason
         )[0]
 
+    def members(self, guild_id: int, limit: int = 1000) -> list[dict]:
+        """Guild members. Paginated: Discord caps one page at 1000."""
+        out: list[dict] = []
+        after = 0
+        while len(out) < limit:
+            page = self.request(
+                "GET",
+                f"/guilds/{guild_id}/members?limit=1000"
+                + (f"&after={after}" if after else ""),
+            ) or []
+            if not page:
+                break
+            out.extend(page)
+            if len(page) < 1000:
+                break
+            after = int(page[-1]["user"]["id"])
+        return out[:limit]
+
     def audit(self, guild_id: int, action_type: int, limit: int = 25) -> list[dict]:
         payload = self.request(
             "GET", f"/guilds/{guild_id}/audit-logs?limit={min(limit, 100)}&action_type={action_type}"

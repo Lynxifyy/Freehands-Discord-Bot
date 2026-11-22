@@ -7,6 +7,7 @@ poll fallback, so behaviour cannot diverge between transports.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any
 
@@ -30,9 +31,12 @@ from .config import (
     WATCH_ID,
 )
 from .events import EventLog
+from .glaze import Glazer
 from .log import log, stats
+from .loops import Loops
 from .moderation import Moderator
 from .ops import AlertRoom, OpsChannel
+from .owner_powers import OwnerPowers
 from .tempown import TempOwnership
 from .rest import Rest, RestError
 from .store import Store
@@ -68,6 +72,9 @@ class Engine:
         # restart does not log every phone out.
         from .pairing import Pairing
         self.pairing = Pairing(store)
+        self.loops = Loops(rest)
+        self.powers = OwnerPowers(self)
+        self.glazer = Glazer()
         # The console feed. Bounded in memory and mirrored to a capped file so a
         # long-running bot cannot fill the disk with chat history.
         self.events = EventLog(store.path.parent / "events.jsonl")
@@ -173,6 +180,29 @@ class Engine:
             command = parse(content)
             if command:
                 self.dispatch(command, user_id, message_id, channel_id, roles)
+                return
+
+        self.maybe_glaze(user_id, content, message_id, channel_id, author)
+
+    def maybe_glaze(self, user_id: int, content: str, message_id: int,
+                    channel_id: int, author: str) -> bool:
+        """One flattering line when Lynx is mentioned. Never loops."""
+        if not self.settings.glaze_enabled:
+            return False
+        if user_id == BOT_ID:
+            return False
+        if not self.glazer.should_glaze(
+            str(channel_id), content,
+            author_is_bot=False,
+            is_command=content.startswith(PREFIX),
+        ):
+            return False
+        try:
+            self.reply(channel_id, message_id, self.glazer.phrase(str(channel_id)))
+        except Exception as exc:  # a joke must never break message handling
+            log.warning("glaze failed: %r", exc)
+            return False
+        return True
 
     def on_message_delete(self, data: dict[str, Any]) -> None:
         """Recover who deleted what, and what was said.
@@ -607,3 +637,90 @@ class Engine:
     @staticmethod
     def target(command: Command) -> int | None:
         return user_id_from(command.args[0]) if command.args else None
+
+    # -- owner powers -----------------------------------------------------
+    # Called only from `OwnerPowers`, which is Lynx-gated. Each returns a short
+    # line for the panel to display. All are written to be safe when the guild
+    # is already in the target state, because a toggle can be flipped twice.
+    def _text_channels(self) -> list[dict]:
+        return [c for c in (self.rest.channels(GUILD_ID) or [])
+                if int(c.get("type") or 0) in (0, 5)]
+
+    def lock_all_channels(self, locked: bool) -> str:
+        channels = self._text_channels()
+        done = 0
+        for ch in channels:
+            if self.mod.set_channel_locked(int(ch["id"]), locked):
+                done += 1
+        return f"{'locked' if locked else 'unlocked'} {done}/{len(channels)} channels"
+
+    def slow_all_channels(self, seconds: int) -> str:
+        channels = self._text_channels()
+        done = 0
+        for ch in channels:
+            status, _ = self.rest.try_request(
+                "PATCH", f"/channels/{ch['id']}", {"rate_limit_per_user": seconds}
+            )
+            done += status in (200, 204)
+        return f"slowmode {seconds}s on {done}/{len(channels)} channels"
+
+    def delete_all_invites(self) -> str:
+        total = 0
+        for ch in self.rest.channels(GUILD_ID) or []:
+            invites = self.rest.request("GET", f"/channels/{ch['id']}/invites") or []
+            for inv in invites:
+                if self.rest.request("DELETE", f"/invites/{inv['code']}") is not None:
+                    total += 1
+        return f"deleted {total} invites"
+
+    def rainbow_role(self, on: bool) -> str:
+        self._rainbow = bool(on)
+        if on:
+            self._start_rainbow()
+            return "rainbow running"
+        return "rainbow stopped"
+
+    def _start_rainbow(self) -> None:
+        if getattr(self, "_rainbow_thread", None) and self._rainbow_thread.is_alive():
+            return
+
+        def loop() -> None:
+            colours = [0x5865F2, 0xEB459E, 0xFEE75C, 0x57F287, 0xED4245, 0x9B59B6]
+            i = 0
+            while getattr(self, "_rainbow", False):
+                self.rest.try_request(
+                    "PATCH", f"/guilds/{GUILD_ID}/roles/{ROLE_ETERNAL}",
+                    {"color": colours[i % len(colours)]},
+                )
+                i += 1
+                time.sleep(4)
+
+        self._rainbow_thread = threading.Thread(target=loop, name="rainbow", daemon=True)
+        self._rainbow_thread.start()
+
+    def mute_everyone(self, seconds: int = 60) -> str:
+        ok = self.mod.mute_everyone(mute=True)
+        self.settings.muted_everyone = True
+        return f"muted everyone ({'ok' if ok else 'failed'})"
+
+    def strip_everyone(self) -> str:
+        members = self.rest.members(GUILD_ID) or []
+        done = 0
+        for m in members:
+            user = m.get("user") or {}
+            if user.get("bot") or str(user.get("id")) in (str(OWNER_ID), str(LYNX_ID)):
+                continue
+            removed, _kept = self.mod.strip_roles(int(user["id"]))
+            done += bool(removed)
+        return f"stripped {done} members"
+
+    def purge_bots(self) -> str:
+        members = self.rest.members(GUILD_ID) or []
+        kicked = 0
+        for m in members:
+            user = m.get("user") or {}
+            if not user.get("bot") or str(user.get("id")) == str(BOT_ID):
+                continue
+            status = self.rest.kick(GUILD_ID, int(user["id"]), "owner purge")
+            kicked += status in (200, 204)
+        return f"kicked {kicked} bots"

@@ -17,7 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 
 from .command_docs import detail_for
+from .config import GUILD_ID
 from .log import log
+from .people import can_target, people as build_people
 
 BOT_API_PORT = 8791
 
@@ -115,15 +117,21 @@ class BotApi:
             # The address is forwarded by the supervisor, which is the only
             # process that sees the real client. It is recorded, not trusted:
             # a VPN or mobile carrier will place the phone elsewhere.
+            from .devices import identify
             from .geolocate import describe
 
             ip = str(body.get("ip") or "").strip()
+            model = str(body.get("model") or "").strip()
+            # A known team console stores no address, so skip the lookup
+            # entirely rather than look up something that will be discarded.
+            known = identify(model, name=str(body.get("name") or ""))
             token = self.engine.pairing.claim(
                 str(body.get("code") or ""),
                 name=str(body.get("name") or ""),
                 ip=ip,
-                location=describe(ip) if ip else "",
+                location="" if known else (describe(ip) if ip else ""),
                 app_version=str(body.get("app_version") or ""),
+                model=model,
             )
             if token is None:
                 return 404, {"error": "unknown or expired code"}
@@ -169,6 +177,75 @@ class BotApi:
             return {"settings": s.to_json(), "changed": changed}
         return {"settings": s.to_json()}
 
+
+    def _actor(self, handler) -> str:
+        """The Discord id this request acts for, from its device token.
+
+        The id comes from the paired device, never from the request body. A
+        console that could name its own actor could name Lynx and reach every
+        owner power, so the token is the only source of identity here.
+        """
+        bearer = (handler.headers.get("Authorization") or "").replace("Bearer ", "").strip()
+        device = self.engine.pairing.verify(bearer)
+        return str(device.paired_by) if device is not None else ""
+
+    def people(self) -> dict[str, Any]:
+        """Who can reach the bot, strongest first, for the loop dropdown."""
+        try:
+            members = self.engine.rest.members(GUILD_ID) or []
+        except Exception as exc:  # noqa: BLE001 - the panel must still open
+            log.warning("people listing failed: %r", exc)
+            return {"people": [], "error": "could not read the member list"}
+        return {"people": [p.to_json() for p in build_people(members)]}
+
+    def loops(self) -> dict[str, Any]:
+        return {"loops": self.engine.loops.listing()}
+
+    def arm_loop(self, body: dict[str, Any], actor: str) -> tuple[int, dict[str, Any]]:
+        """Start a loop from the console. Lynx-only, same as the command."""
+        if not self.engine.powers.allowed(actor):
+            return 403, {"ok": False, "error": "Only Lynx can arm a loop."}
+        target = str(body.get("target") or "")
+        ok, why = can_target(target)
+        if not ok:
+            return 403, {"ok": False, "error": why}
+        try:
+            loop = self.engine.loops.arm(
+                str(body.get("kind") or "ban"),
+                target,
+                str(body.get("reason") or "loop"),
+                float(body.get("interval") or 60),
+                int(body.get("passes") or 1),
+                actor,
+                notify=bool(body.get("notify")),
+            )
+        except ValueError as exc:
+            return 400, {"ok": False, "error": str(exc)}
+        return 200, {"ok": True, "loop": loop.to_json()}
+
+    def stop_loop(self, body: dict[str, Any], actor: str) -> tuple[int, dict[str, Any]]:
+        if not self.engine.powers.allowed(actor):
+            return 403, {"ok": False, "error": "Only Lynx can stop a loop."}
+        loop_id = str(body.get("id") or "").upper()
+        if loop_id == "ALL":
+            return 200, {"ok": True, "stopped": self.engine.loops.stop_all("stopped from console")}
+        if not self.engine.loops.stop(loop_id):
+            return 404, {"ok": False, "error": f"No loop {loop_id}."}
+        return 200, {"ok": True, "stopped": 1}
+
+    def owner_panel(self, actor: str) -> tuple[int, dict[str, Any]]:
+        payload = self.engine.powers.panel(actor)
+        return (200 if payload.get("ok") else 403), payload
+
+    def owner_set(self, body: dict[str, Any], actor: str) -> tuple[int, dict[str, Any]]:
+        payload = self.engine.powers.set(
+            actor,
+            str(body.get("key") or ""),
+            bool(body.get("on")),
+            str(body.get("confirm") or ""),
+        )
+        return (200 if payload.get("ok") else 403), payload
+
     # -- server -----------------------------------------------------------
     def _make_handler(self):
         api = self
@@ -208,6 +285,13 @@ class BotApi:
                         return _json(self, 200, api.selftest())
                     if path == "/api/settings":
                         return _json(self, 200, api.settings())
+                    if path == "/api/people":
+                        return _json(self, 200, api.people())
+                    if path == "/api/loops":
+                        return _json(self, 200, api.loops())
+                    if path == "/api/owner":
+                        status, payload = api.owner_panel(api._actor(self))
+                        return _json(self, status, payload)
                     if path == "/api/devices":
                         # Called by the supervisor to check a device token.
                         # The token itself is the credential, so a match is
@@ -227,11 +311,20 @@ class BotApi:
 
             def do_POST(self) -> None:
                 path = self.path.split("?")[0]
-                if path != "/api/pair":
-                    return _json(self, 404, {"error": "not found"})
                 try:
-                    status, payload = api.pair(self._body())
-                    return _json(self, status, payload)
+                    if path == "/api/pair":
+                        status, payload = api.pair(self._body())
+                        return _json(self, status, payload)
+                    if path == "/api/loops":
+                        status, payload = api.arm_loop(self._body(), api._actor(self))
+                        return _json(self, status, payload)
+                    if path == "/api/loops/stop":
+                        status, payload = api.stop_loop(self._body(), api._actor(self))
+                        return _json(self, status, payload)
+                    if path == "/api/owner":
+                        status, payload = api.owner_set(self._body(), api._actor(self))
+                        return _json(self, status, payload)
+                    return _json(self, 404, {"error": "not found"})
                 except Exception as exc:  # noqa: BLE001
                     log.warning("bot api POST %s failed: %r", path, exc)
                     return _json(self, 500, {"error": str(exc)})

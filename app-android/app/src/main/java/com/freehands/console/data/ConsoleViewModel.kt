@@ -32,6 +32,11 @@ data class UiState(
     val testing: Boolean = false,
     val update: UpdateInfo? = null,
     val updateDismissed: Boolean = false,
+    val people: List<Person> = emptyList(),
+    val loops: List<LoopInfo> = emptyList(),
+    val powers: List<Power>? = null,
+    /** Transient line shown after a loop or power action. */
+    val notice: String? = null,
 )
 
 /**
@@ -70,6 +75,86 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
             refreshCreator()
             poll()
         }
+    }
+
+
+    // -- loops -------------------------------------------------------------
+    /**
+     * Loads the people a loop can target, plus the loops already running.
+     * Called when the panel opens rather than on the poll, because the member
+     * list is a heavier call than the status refresh.
+     */
+    fun loadLoops() {
+        viewModelScope.launch {
+            val people = runCatching { api.people() }.getOrDefault(emptyList())
+            val loops = runCatching { api.loops() }.getOrDefault(emptyList())
+            _state.value = _state.value.copy(people = people, loops = loops)
+        }
+    }
+
+    fun armLoop(
+        kind: String,
+        target: String,
+        passes: Int,
+        intervalSeconds: Int,
+        reason: String,
+        notify: Boolean,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                api.armLoop(kind, target, passes, intervalSeconds, reason, notify)
+            }
+                .onSuccess { loop ->
+                    _state.value = _state.value.copy(
+                        notice = "${loop.id} armed: $kind every ${loop.interval.toInt()}s " +
+                            "for ${loop.passes} passes",
+                        loops = runCatching { api.loops() }.getOrDefault(_state.value.loops),
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(notice = e.message ?: "could not arm the loop")
+                }
+        }
+    }
+
+    fun stopLoop(id: String) {
+        viewModelScope.launch {
+            runCatching { api.stopLoop(id) }
+                .onSuccess {
+                    _state.value = _state.value.copy(
+                        notice = "stopped $id",
+                        loops = runCatching { api.loops() }.getOrDefault(_state.value.loops),
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(notice = e.message ?: "could not stop $id")
+                }
+        }
+    }
+
+    // -- owner powers ------------------------------------------------------
+    fun loadPowers() {
+        viewModelScope.launch {
+            val powers = api.ownerPanel()
+            _state.value = _state.value.copy(
+                powers = powers,
+                notice = if (powers == null) "Owner powers are Lynx only." else null,
+            )
+        }
+    }
+
+    fun setPower(key: String, on: Boolean, confirm: String = "") {
+        viewModelScope.launch {
+            val detail = api.setPower(key, on, confirm)
+            _state.value = _state.value.copy(
+                powers = api.ownerPanel() ?: _state.value.powers,
+                notice = detail ?: "$key ${if (on) "on" else "off"}",
+            )
+        }
+    }
+
+    fun clearNotice() {
+        _state.value = _state.value.copy(notice = null)
     }
 
     /**
@@ -123,7 +208,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             _state.value = _state.value.copy(pairing = true, pairError = null)
-            runCatching { api.pair(cleaned, deviceName()) }
+            runCatching { api.pair(cleaned, deviceName(), Build.MODEL) }
                 .onSuccess { token ->
                     prefs.edit()
                         .putString("base", api.baseUrl)

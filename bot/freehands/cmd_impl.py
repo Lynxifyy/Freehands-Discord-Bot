@@ -67,6 +67,17 @@ def register(engine) -> None:
     add(Spec("ban", _bind(engine, ban), "owner", "+ban <user> [reason]", "ban (refused while anti-ban)"))
     add(Spec("unban", _bind(engine, unban), "owner", "+unban <user>", "unban"))
     add(Spec("kick", _bind(engine, kick), "owner", "+kick <user>", "kick"))
+    add(Spec("glaze", _bind(engine, glaze), "owner", "+glaze on|off",
+             "flattering replies when Lynx is mentioned"))
+    add(Spec("loopban", _bind(engine, loopban), "owner",
+             "+loopban <user> <passes> [interval] [reason]",
+             "repeat a ban on a timer", aliases=("lban",)))
+    add(Spec("loopkick", _bind(engine, loopkick), "owner",
+             "+loopkick <user> <passes> [interval] [reason]",
+             "repeat a kick on a timer", aliases=("lkick",)))
+    add(Spec("loopstop", _bind(engine, loopstop), "owner", "+loopstop <id>|all",
+             "stop one loop or every loop"))
+    add(Spec("loops", _bind(engine, loops_), "mod", "+loops", "list armed loops"))
     add(Spec("mute", _bind(engine, mute), "mod", "+mute <user> [10m] [reason]", "timeout"))
     add(Spec("unmute", _bind(engine, unmute), "mod", "+unmute <user>", "clear timeout"))
     add(Spec("nomute", _bind(engine, nomute), "owner", "+nomute on|off", "freeze all mutes"))
@@ -452,6 +463,89 @@ def kick(engine, command, user_id, message_id, channel_id, roles):
     status = engine.rest.kick(GUILD_ID, target, " ".join(command.args[1:]) or "kick")
     engine.reply(channel_id, message_id,
                  f"<@{target}> kicked." if status in (200, 204) else f"Kick failed ({status}).")
+
+
+
+def glaze(engine, command, user_id, message_id, channel_id, roles):
+    want = (command.args[0].lower() if command.args else "")
+    if want not in ("on", "off"):
+        engine.reply(channel_id, message_id,
+                     f"Glaze is {'on' if engine.settings.glaze_enabled else 'off'}. "
+                     f"Use `+glaze on|off`.")
+        return
+    engine.settings.glaze_enabled = want == "on"
+    engine.store.touch()
+    engine.reply(channel_id, message_id,
+                 f"Glaze {'on' if engine.settings.glaze_enabled else 'off'}.")
+
+
+def loopban(engine, command, user_id, message_id, channel_id, roles):
+    return _loop(engine, command, user_id, message_id, channel_id, "ban")
+
+
+def loopkick(engine, command, user_id, message_id, channel_id, roles):
+    return _loop(engine, command, user_id, message_id, channel_id, "kick")
+
+
+def _loop(engine, command, user_id, message_id, channel_id, kind):
+    """`+loopban <user> <passes> [interval] [reason]`"""
+    args = list(command.args)
+    target = engine.target(command)
+    if not target:
+        engine.reply(channel_id, message_id,
+                     f"Who? `+loop{kind} <user> <passes> [interval] [reason]`")
+        return
+    # Drop the target token, whatever form it was written in.
+    while args and not args[0].lstrip("<@!>").isdigit():
+        args.pop(0)
+    if not args or not args[0].isdigit():
+        engine.reply(channel_id, message_id,
+                     f"How many passes? `+loop{kind} <user> <passes> [interval] [reason]`")
+        return
+    passes = int(args.pop(0))
+    interval = 60.0
+    if args and args[0].rstrip("s").replace(".", "", 1).isdigit():
+        interval = float(args.pop(0).rstrip("s"))
+    reason = " ".join(args) or "loop"
+    try:
+        loop = engine.loops.arm(kind, str(target), reason, interval, passes, str(user_id))
+    except ValueError as exc:
+        engine.reply(channel_id, message_id, f"Refused — {exc}.")
+        return
+    engine.reply(channel_id, message_id,
+                 f"{loop.id}: {kind} loop on <@{target}> — {passes} passes every "
+                 f"{int(interval)}s. `+loopstop {loop.id}` ends it.")
+
+
+def loopstop(engine, command, user_id, message_id, channel_id, roles):
+    target = (command.args[0] if command.args else "").upper()
+    if target == "ALL":
+        n = engine.loops.stop_all("stopped by operator")
+        engine.reply(channel_id, message_id, f"Stopped {n} loop{'s' if n != 1 else ''}.")
+        return
+    if not target:
+        engine.reply(channel_id, message_id, "Use `+loopstop <id>` or `+loopstop all`.")
+        return
+    ok = engine.loops.stop(target)
+    engine.reply(channel_id, message_id,
+                 f"Stopped {target}." if ok else f"No loop `{target}`.")
+
+
+def loops_(engine, command, user_id, message_id, channel_id, roles):
+    rows = engine.loops.listing()
+    if not rows:
+        engine.reply(channel_id, message_id, "No loops armed.")
+        return
+    lines = [f"**Loops** — {len(rows)}", ""]
+    for r in rows:
+        state = "running" if r["running"] else r["stopped"] or "finished"
+        lines.append(
+            f"`{r['id']}` **{r['kind']}** <@{r['target']}> — "
+            f"{r['fired']}/{r['passes']} every {int(r['interval'])}s ({state})"
+        )
+        if r["last_error"]:
+            lines.append(f"  last error: {r['last_error']}")
+    engine.reply(channel_id, message_id, "\n".join(lines))
 
 
 def mute(engine, command, user_id, message_id, channel_id, roles):

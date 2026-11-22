@@ -107,3 +107,95 @@ class StatusCachingTest(unittest.TestCase):
             api.status()
         self.assertEqual(Rest.calls, 1)
         self.assertEqual(api.identity(), {"id": "1", "name": "Freehands"})
+
+
+class NewPanelContractTest(unittest.TestCase):
+    """The loop and owner panels read these keys. A missing one renders blank."""
+
+    def _api(self):
+        from freehands.console import BotApi
+        from freehands.loops import Loops
+        from freehands.owner_powers import OwnerPowers
+
+        class Rest:
+            def members(self, guild_id, limit=1000):
+                return [{
+                    "user": {"id": "1002131928775925840", "username": "lynx"},
+                    "roles": [],
+                }]
+
+        class Settings:
+            def to_json(self):
+                return {}
+
+        class Events:
+            def counts(self):
+                return {}
+
+        class Pairing:
+            devices = {}
+
+            def verify(self, token):
+                return None
+
+        class Engine:
+            rest = Rest()
+            settings = Settings()
+            events = Events()
+            pairing = Pairing()
+
+        engine = Engine()
+        engine.loops = Loops(engine.rest)
+        engine.powers = OwnerPowers(engine)
+        return BotApi(engine)
+
+    def test_people_carries_every_key_the_dropdown_reads(self):
+        rows = self._api().people()["people"]
+        self.assertEqual(len(rows), 1)
+        self.assertLessEqual(
+            {"id", "name", "display", "tier", "label", "avatar",
+             "protected", "reason"},
+            set(rows[0]),
+        )
+        self.assertTrue(rows[0]["protected"], "Lynx must be marked protected")
+
+    def test_loops_carries_every_key_the_list_reads(self):
+        api = self._api()
+        self.assertEqual(api.loops(), {"loops": []})
+        api.engine.loops.arm("ban", "555", "x", 600, 2, "1")
+        row = api.loops()["loops"][0]
+        self.assertLessEqual(
+            {"id", "kind", "target", "reason", "interval", "passes",
+             "fired", "running", "stopped", "last_error"},
+            set(row),
+        )
+        api.engine.loops.stop_all()
+
+    def test_the_owner_panel_carries_every_key_the_sheet_reads(self):
+        from freehands.config import LYNX_ID
+        status, payload = self._api().owner_panel(str(LYNX_ID))
+        self.assertEqual(status, 200)
+        self.assertLessEqual(
+            {"key", "name", "blurb", "kind", "confirm", "on"},
+            set(payload["powers"][0]),
+        )
+
+    def test_a_non_lynx_caller_is_refused_by_the_endpoint(self):
+        status, payload = self._api().owner_panel("123")
+        self.assertEqual(status, 403)
+        self.assertFalse(payload["ok"])
+
+    def test_arming_a_loop_from_the_endpoint_refuses_lynx_as_a_target(self):
+        from freehands.config import LYNX_ID
+        status, payload = self._api().arm_loop(
+            {"kind": "ban", "target": str(LYNX_ID), "passes": 2}, str(LYNX_ID)
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(payload["ok"])
+
+    def test_arming_a_loop_from_the_endpoint_refuses_a_non_lynx_actor(self):
+        status, payload = self._api().arm_loop(
+            {"kind": "ban", "target": "555", "passes": 2}, "123"
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(payload["ok"])
