@@ -39,6 +39,9 @@ class Code:
     emoji: str = EYES
     ping_owner: bool = False
     ping_arceus: bool = False
+    # The server owner and Lynx are different people, and an operator code has
+    # to reach both: OWNER_ID is the guild owner, LYNX_ID is the bot's creator.
+    ping_lynx: bool = False
     ping_roles: tuple[str, ...] = ()
     silence: bool = False             # delete the trigger message (go dark)
     purge_seconds: int = 0            # delete recent messages from the sender
@@ -68,25 +71,25 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     3: Code(
         3, "Request backup", "More operators are needed.",
-        "medium", SIREN, ping_owner=True, ping_arceus=True,
+        "medium", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True,
         response="Backup requested. Operators notified.",
         aliases=("request backup", "need backup"),
     ),
     4: Code(
         4, "Comms compromised", "Assume the channel is being read.",
-        "high", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        "high", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, silence=True, ops=True,
         response="Comms compromised. Going quiet — move to a private channel.",
         aliases=("comms compromised",),
     ),
     5: Code(
         5, "Target acquired", "The subject is identified.",
-        "medium", "\N{DIRECT HIT}", ping_owner=True,
+        "medium", "\N{DIRECT HIT}", ping_owner=True, ping_lynx=True,
         response="Target acquired. File the identification when safe.",
         aliases=("target acquired",),
     ),
     6: Code(
         6, "Extraction needed", "An operator needs to be pulled out.",
-        "high", SIREN, ping_owner=True, ping_arceus=True,
+        "high", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True,
         response="Extraction flagged. Hold position until contact.",
         aliases=("extraction needed",),
     ),
@@ -98,7 +101,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     8: Code(
         8, "Suspected spy", "A member of this channel is suspected of spying.",
-        "high", EYES, ping_owner=True, ping_arceus=True,
+        "high", EYES, ping_owner=True, ping_lynx=True, ping_arceus=True,
         # Nothing is posted in open chat: naming a suspected spy where the spy
         # can read it defeats the point. The alert goes to a private room and
         # the trigger message is removed.
@@ -113,7 +116,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     9: Code(
         9, "Cover blown", "Identity is exposed; evacuate the operation.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, silence=True, ops=True,
         purge_seconds=300,
         response=(
             "**Code 9 — cover blown.** Evacuate. Stop posting here. "
@@ -123,7 +126,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     10: Code(
         10, "Getting found out", "The sender believes they are being discovered.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, silence=True, ops=True,
         response=(
             "**Code 10 — operator is being found out.** "
             "Message removed. @here is not pinged; operators, check your DMs "
@@ -133,7 +136,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     11: Code(
         11, "Dyllan's back", "Dyllan has returned to the server.",
-        "high", EYES, ping_owner=True, ping_arceus=True, ops=True, arm_watch=True,
+        "high", EYES, ping_owner=True, ping_lynx=True, ping_arceus=True, ops=True, arm_watch=True,
         response=(
             "**Code 11 - Dyllan's back.** The watch is armed. Every message he "
             "sends is now logged here and screened. Operators pinged."
@@ -143,13 +146,13 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     12: Code(
         12, "Full lockdown", "Lock the channel and stop all traffic.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, silence=True, ops=True,
         response="**Code 12 — lockdown.** Channel locked, traffic stopped.",
         aliases=("full lockdown",),
     ),
     13: Code(
         13, "Raid incoming", "A join wave is starting or already underway.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, ops=True,
         response=(
             "**Code 13 — raid incoming.** Raise verification and stop inviting. "
             "Auto-lockdown will trigger on its own if joins keep landing."
@@ -158,7 +161,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     14: Code(
         14, "Leak", "Server content is being copied out.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, silence=True, ops=True,
         purge_seconds=600,
         response=(
             "**Code 14 — leak.** Screenshots or files are leaving the server. "
@@ -169,7 +172,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     15: Code(
         15, "Impersonation", "Someone is posing as an operator or the bot.",
-        "high", EYES, ping_owner=True, ping_arceus=True, ops=True,
+        "high", EYES, ping_owner=True, ping_lynx=True, ping_arceus=True, ops=True,
         response=(
             "**Code 15 — impersonation.** Check display names, avatars and role "
             "colours. Real operators will not DM you first."
@@ -178,7 +181,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     16: Code(
         16, "Admin abuse", "A staff account is acting against the server.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, ops=True,
         response=(
             "**Code 16 — admin abuse.** Stop granting roles. Review the audit "
             "log and pull the account's permissions before anything else."
@@ -187,7 +190,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     17: Code(
         17, "DM compromise", "An operator's direct messages are exposed.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, silence=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, silence=True, ops=True,
         response=(
             "**Code 17 — DM compromise.** Assume every private conversation is "
             "readable. Rotate the token, then change passwords."
@@ -196,13 +199,13 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     18: Code(
         18, "Evidence secured", "Proof has been saved; it is safe to move on.",
-        "low", WHITE_CHECK, ping_owner=True,
+        "low", WHITE_CHECK, ping_owner=True, ping_lynx=True,
         response="Evidence secured. Nothing further needed here.",
         aliases=("evidence secured", "evidence saved", "proof secured"),
     ),
     19: Code(
         19, "Radio silence", "Nobody posts until an operator clears it.",
-        "high", "🔇", ping_owner=True, ping_arceus=True,
+        "high", "🔇", ping_owner=True, ping_lynx=True, ping_arceus=True,
         silence=True, ops=True,
         response=(
             "**Code 19 — radio silence.** Stop posting in open chat. Operators "
@@ -212,7 +215,7 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
     20: Code(
         20, "Server compromised", "The guild itself may be under someone else's control.",
-        "critical", SIREN, ping_owner=True, ping_arceus=True, ops=True,
+        "critical", SIREN, ping_owner=True, ping_lynx=True, ping_arceus=True, ops=True,
         response=(
             "**Code 20 — server compromised.** Treat every staff account as "
             "hostile. Owner: verify your 2FA and active sessions now."
@@ -370,7 +373,8 @@ class Codebook:
 
 
 def render_alert(hit: Hit, author_id: int, author_name: str,
-                 owner_id: int, arceus_id: int, extra_pings: list[str]) -> str:
+                 owner_id: int, arceus_id: int, extra_pings: list[str],
+                 lynx_id: int = 0) -> str:
     """Build the alert body for a triggered code."""
     code = hit.code
     pings = list(extra_pings)
@@ -378,6 +382,8 @@ def render_alert(hit: Hit, author_id: int, author_name: str,
         pings.append(f"<@{owner_id}>")
     if code.ping_arceus:
         pings.append(f"<@{arceus_id}>")
+    if code.ping_lynx and lynx_id:
+        pings.append(f"<@{lynx_id}>")
     head = f"{code.emoji} **CODE {code.number} — {code.title.upper()}**"
     lines = [head, ""]
     lines.append(f"**Reported by** <@{author_id}>")
