@@ -17,7 +17,7 @@ or any of the operator roles (Owner, Co owner, Administrator).
 | `+ops create` | owner | Create or find the private channel |
 | `+ops lock` | owner | Force it back to the three-person allow-list |
 | `+ops audit` | owner | Show who can actually read it |
-| `+dyllan on\|off` | owner | Arm or disarm the watch |
+| `+watchtarget on\|off` | owner | Arm or disarm the z_nyxx watch (`+dyllan` still works) |
 | `+Temp Ownership @user [min]` | **Lynx only** | Lend ownership for 10 minutes |
 | `+Temp Ownership end` | **Lynx only** | Take it back immediately |
 | `+Temp Ownership status` | **Lynx only** | Who holds it, and how long is left |
@@ -34,7 +34,7 @@ or any of the operator roles (Owner, Co owner, Administrator).
 | `+mod on\|off` | owner | Master moderation switch |
 | `+automod on\|off` | owner | Slurs, spam, invites, punish requests |
 | `+codesense on\|off` | owner | Code detection |
-| `+watch on\|off` | owner | Watching the flagged member |
+| `+watch on\|off` | owner | Master switch for the watch feature |
 | `+nomute on\|off` | owner | Freeze every mute |
 
 `+antiban` with no argument reports the current state. Arming it runs a sweep
@@ -178,7 +178,7 @@ Code 11 means Dyllan is back. It does two things beyond alerting: it **arms the
 watch**, and from then on every message he sends is copied into the private
 channel with the rules it tripped (`slur`, `invite`, `mass mention`,
 `caps flood`, `punish request`). The watch stays armed across restarts until you
-turn it off with `+dyllan off`.
+turn it off with `+watchtarget off`.
 
 Matching accepts `code 8`, `code-8`, `code: 8`, `code #8`, `code8`, `code eight`,
 and `code VIII`. A bare number never triggers, so ordinary chatter stays quiet.

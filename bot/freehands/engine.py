@@ -19,6 +19,7 @@ from .config import (
     CODE8_MEMBERS,
     GUILD_ID,
     LYNX_ID,
+    DYLLAN_ID,
     MAIN_CHAT_ID,
     MOD_ROLES,
     OPERATOR_ROLES,
@@ -397,17 +398,20 @@ class Engine:
         stats.bump("slur_strikes")
 
     def punish(self, user_id: int, message_id: int, channel_id: int, roles: set[int]) -> None:
+        """Timeout Dyllan on request. Targets Dyllan explicitly, not the watch
+        target: `is_punish_request` only fires on his aliases, and pointing the
+        watch elsewhere must not move who this punishes."""
         if not self.is_operator(user_id, roles):
             return
-        count = self.store.strike(WATCH_ID, "punish")
-        self.rest.timeout(GUILD_ID, WATCH_ID, 3600, "punish request")
+        count = self.store.strike(DYLLAN_ID, "punish")
+        self.rest.timeout(GUILD_ID, DYLLAN_ID, 3600, "punish request")
         self.rest.reply(
-            channel_id, message_id, f"Punishment {count} applied to <@{WATCH_ID}> (1h)."
+            channel_id, message_id, f"Punishment {count} applied to <@{DYLLAN_ID}> (1h)."
         )
         if count >= self.settings.punish_strikes_to_lock:
             self.rest.send(
                 channel_id,
-                f"<@{OWNER_ID}> <@{ARCEUS_ID}> <@{LYNX_ID}> — <@{WATCH_ID}> has hit "
+                f"<@{OWNER_ID}> <@{ARCEUS_ID}> <@{LYNX_ID}> — <@{DYLLAN_ID}> has hit "
                 f"{count} punishments. Lock the channel? `+lockvote yes`.",
             )
             self.store.questions["lockvote"] = {"votes": [], "at": int(time.time())}

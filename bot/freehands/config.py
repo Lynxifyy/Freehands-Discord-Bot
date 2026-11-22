@@ -18,10 +18,11 @@ BOT_ID = 1568005572769480704
 OWNER_ID = 1310733783653154816
 ARCEUS_ID = 1523669026201669753
 LYNX_ID = 1002131928775925840
-BUM_ID = 1566512766066491642
+BUM_ID = 1566512766066491642          # z_nyxx
 
 # People the bot watches or keeps out
-WATCH_ID = 1522388014418886746        # Dyllan / Mysterious Stranger
+WATCH_ID = 1566512766066491642        # z_nyxx
+DYLLAN_ID = 1522388014418886746       # Dyllan / Mysterious Stranger
 KEEP_BANNED_ID = 1535047765032173668  # 『NS』Veil
 
 # The only three people who may see the private operator channel. Written as

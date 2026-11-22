@@ -43,9 +43,11 @@ Arceus cannot be bankrupted by anyone.
 minutes with `+Temp Ownership @user`. The deadline is stored, so it expires even
 across a restart. Only Lynx can run it.
 
-**The Dyllan watch.** `code 11` means *Dyllan's back*. It arms a watch that
+**The z_nyxx watch.** `code 11` means *Dyllan's back* and arms the watch; the
+watch itself follows z_nyxx. It logs every message they send and screens it for
 copies every message he sends into the private channel and flags what it tripped -
-slurs, invites, mass mentions. It stays armed until `+dyllan off`.
+slurs, invites, mass mentions. It stays armed until `+watchtarget off`
+(`+dyllan off` is kept as an alias).
 
 **Ban protection.** Anti-ban lifts every ban this bot did not issue, from three
 independent paths: a periodic sweep, the audit log, and the live ban event.
@@ -105,7 +107,8 @@ Prefix is `+`. See [docs/COMMANDS.md](docs/COMMANDS.md) for every command and
 +help                    what you can run
 +codes                   the codebook
 +ops [create|lock|audit]  the private operator channel
-+dyllan on|off            arm or disarm the watch
++watchtarget on|off       arm or disarm the z_nyxx watch
++demote <user> <reason>    strip all roles, DM why, notify owner
 +Temp Ownership @user     lend ownership for 10 minutes (Lynx only)
 +bankrupt @user           strip every role and notify them (any tier)
 +bankrupt recover @user   give the roles back (moderator or owner)

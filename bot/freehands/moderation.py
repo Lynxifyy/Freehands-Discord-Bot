@@ -94,7 +94,9 @@ class Moderator:
         if not member:
             return [], ["member not found"]
         removed, skipped = [], []
-        for raw in member.get("roles", []):
+        # Iterate a snapshot: a Rest double may hand back a live list that
+        # remove_role mutates, and mutating while iterating skips roles.
+        for raw in list(member.get("roles", [])):
             role_id = int(raw)
             if role_id in keep:
                 skipped.append(self.role_name(role_id))
@@ -123,7 +125,7 @@ class Moderator:
         taken: list[int] = []
         removed: list[str] = []
         kept: list[str] = []
-        for raw in member.get("roles", []):
+        for raw in list(member.get("roles", [])):
             role_id = int(raw)
             if role_id == ROLE_ETERNAL:
                 kept.append(self.role_name(role_id))

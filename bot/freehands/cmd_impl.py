@@ -55,8 +55,9 @@ def register(engine) -> None:
     add(Spec("watch", _bind(engine, watch), "owner", "+watch on|off", "watch the flagged member"))
     add(Spec("ops", _bind(engine, ops), "owner", "+ops create|lock|status",
              "the private operator channel", aliases=("opchan",)))
-    add(Spec("dyllan", _bind(engine, dyllan), "owner", "+dyllan on|off|status",
-             "watch Dyllan's messages", aliases=("ms",)))
+    add(Spec("watchtarget", _bind(engine, dyllan), "owner", "+watchtarget on|off|status",
+             "arm or disarm the flagged-member watch",
+             aliases=("dyllan", "ms")))
     add(Spec("lock", _bind(engine, lock), "owner", "+lock", "lock the channel"))
     add(Spec("unlock", _bind(engine, unlock), "owner", "+unlock", "unlock the channel"))
     add(Spec("lockvote", _bind(engine, lockvote), "owner", "+lockvote yes|no", "vote on a lockdown"))
@@ -70,6 +71,8 @@ def register(engine) -> None:
     add(Spec("unmute", _bind(engine, unmute), "mod", "+unmute <user>", "clear timeout"))
     add(Spec("nomute", _bind(engine, nomute), "owner", "+nomute on|off", "freeze all mutes"))
     add(Spec("takeall", _bind(engine, takeall), "owner", "+takeall <user>", "strip every role"))
+    add(Spec("demote", _bind(engine, demote), "owner", "+demote <user> <reason>",
+             "strip all roles, tell them why, notify the owner"))
     add(Spec("bankrupt", _bind(engine, bankrupt), "user", "+bankrupt <user>",
              "strip every role and notify them",
              aliases=("bankruptrecover",)))
@@ -304,12 +307,13 @@ def ops(engine, command, user_id, message_id, channel_id, roles):
         channel_id, message_id,
         f"**Ops channel** {engine.ops.describe()}\n"
         f"**Allowed** owner, Arceus, Lynx, me\n"
-        f"**Dyllan watch** {state}\n"
-        f"\n`+ops create` | `+ops lock` | `+dyllan on|off`",
+        f"**Watch ({WATCH_ID})** {state}\n"
+        f"\n`+ops create` | `+ops lock` | `+watchtarget on|off`",
     )
 
 
 def dyllan(engine, command, user_id, message_id, channel_id, roles):
+    """Arm or disarm the watch. Named `+watchtarget`; `+dyllan` still works."""
     arg = (command.args[0].lower() if command.args else "status")
     if arg in ("on", "arm", "start", "watch"):
         engine.arm_watch(True)
@@ -323,7 +327,7 @@ def dyllan(engine, command, user_id, message_id, channel_id, roles):
         return
     state = "armed" if engine.settings.watch_armed else "disarmed"
     engine.reply(channel_id, message_id,
-                 f"<@{WATCH_ID}> watch is **{state}**. `+dyllan on|off` to change it.")
+                 f"<@{WATCH_ID}> watch is **{state}**. `+watchtarget on|off` to change it.")
 
 
 # -- channel state -------------------------------------------------------
@@ -679,6 +683,73 @@ def bankrupt(engine, command, user_id, message_id, channel_id, roles):
         f"Kept: {', '.join(kept) if kept else 'none'}\n"
         f"Notified: {'yes, by DM' if delivered else 'no - their DMs are closed'}\n"
         f"Undo with `+bankrupt recover @user`.",
+    )
+
+
+def demote(engine, command, user_id, message_id, channel_id, roles):
+    """`+demote @user <reason>` - strip every role, tell them why, tell the owner.
+
+    Unlike `+bankrupt` this is an owner-tier action with a stated reason, because
+    the point is a consequence the server can point at later, not a reversible
+    prank. The roles are snapshotted first so `+restore` can still undo it.
+    """
+    target = engine.target(command)
+    if not target:
+        engine.reply(channel_id, message_id,
+                     "Who? `+demote @user <reason>` - the reason is required.")
+        return
+    reason = " ".join(command.args[1:]).strip()
+    if not reason:
+        engine.reply(channel_id, message_id,
+                     "A reason is required: `+demote @user <reason>`.")
+        return
+    if target in PROTECTED:
+        engine.reply(channel_id, message_id,
+                     f"<@{target}> is a protected operator and cannot be demoted.")
+        return
+    if target == user_id:
+        engine.reply(channel_id, message_id, "You cannot demote yourself.")
+        return
+    if target == BOT_ID:
+        engine.reply(channel_id, message_id, "I am not going to demote myself.")
+        return
+
+    member = engine.rest.member(GUILD_ID, target) or {}
+    name = (member.get("nick") or (member.get("user") or {}).get("username")
+            or str(target))
+    engine.mod.snapshot(target)
+    removed, kept = engine.mod.strip_roles(target, keep=())
+    if not removed:
+        engine.reply(channel_id, message_id,
+                     f"<@{target}> had no roles I am allowed to remove."
+                     + (f" Kept: {', '.join(kept)}" if kept else ""))
+        return
+
+    delivered = engine.rest.dm(
+        target,
+        "**Your roles in ᴇᴛᴇʀɴᴀʟ have been removed.**\n"
+        f"**Reason:** {reason}\n"
+        "An owner can restore them with `+restore @you`.",
+    )
+    # The owner is told in the channel the command ran in, and by DM, because a
+    # demotion is exactly the kind of action that should not be missed.
+    engine.send(
+        channel_id,
+        f"<@{OWNER_ID}> **Demotion:** <@{target}> (`{name}`)\n"
+        f"**Reason:** {reason}\n"
+        f"**Removed:** {', '.join(removed) if removed else 'none'}\n"
+        f"**Kept:** {', '.join(kept) if kept else 'none'}\n"
+        f"**Notified:** {'yes, by DM' if delivered else 'no - their DMs are closed'}\n"
+        f"Undo with `+restore @user`.",
+        allowed_mentions={"parse": [], "users": [str(OWNER_ID)]},
+    )
+    engine.rest.dm(
+        OWNER_ID,
+        f"**Demotion in ᴇᴛᴇʀɴᴀʟ**\n"
+        f"<@{target}> (`{name}`) had their roles removed.\n"
+        f"**Reason:** {reason}\n"
+        f"**Removed:** {', '.join(removed)}\n"
+        f"**By:** <@{user_id}>",
     )
 
 
