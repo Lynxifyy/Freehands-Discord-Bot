@@ -24,4 +24,9 @@ app-android/local.properties
 app-android/.idea/
 *.apk
 *.keystore
+*.jks
+# Signing material: the private key and the passwords beside it must never be
+# committed. CI supplies the same values from repository secrets.
+app-android/keystore.properties
+keystore.properties
 bot/events.jsonl
