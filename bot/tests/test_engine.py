@@ -237,18 +237,24 @@ class CodeAlertTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_code_8_alerts_and_pings_owner_and_arceus(self):
-        self.engine.on_message(message(LYNX_ID, "code 8"))
+    def test_code_8_alerts_and_pings_owner_arceus_and_lynx(self):
+        # Reported by someone else: the author is always in the mention list,
+        # so sending as Lynx would pass even if she were never added.
+        self.engine.on_message(message(999, "code 8"))
         self.assertEqual(len(self.rest.sent), 1)
         self.assertNotEqual(self.rest.sent[0]["channel"], MAIN_CHAT_ID)
         body = self.rest.sent[0]["content"]
         self.assertIn("CODE 8", body)
         self.assertIn(f"<@{OWNER_ID}>", body)
         self.assertIn(f"<@{ARCEUS_ID}>", body)
+        self.assertIn(f"<@{LYNX_ID}>", body)
         self.assertIn("\N{EYES}", body)
         mentions = self.rest.sent[0]["allowed_mentions"]
         self.assertIn(str(OWNER_ID), mentions["users"])
         self.assertIn(str(ARCEUS_ID), mentions["users"])
+        # The guild owner and the bot's creator are different accounts, so a
+        # code that pings "the owner" has to reach Lynx as well.
+        self.assertIn(str(LYNX_ID), mentions["users"])
 
     def test_code_10_deletes_the_trigger_message(self):
         self.engine.on_message(message(LYNX_ID, "code 10", message_id=99))

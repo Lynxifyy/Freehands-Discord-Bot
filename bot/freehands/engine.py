@@ -379,7 +379,8 @@ class Engine:
             return False
         code = hit.code
         extra = [f"<@&{role_id}>" for role_id in code.ping_roles]
-        body = render_alert(hit, user_id, author.get("username", ""), OWNER_ID, ARCEUS_ID, extra)
+        body = render_alert(hit, user_id, author.get("username", ""), OWNER_ID,
+                            ARCEUS_ID, extra, lynx_id=LYNX_ID)
 
         if code.silence:
             self.rest.delete(channel_id, message_id)
@@ -388,6 +389,8 @@ class Engine:
             users.append(str(OWNER_ID))
         if code.ping_arceus:
             users.append(str(ARCEUS_ID))
+        if code.ping_lynx:
+            users.append(str(LYNX_ID))
         mentions = {
             "parse": [],
             "users": list(dict.fromkeys(users)),
