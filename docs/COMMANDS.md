@@ -24,6 +24,25 @@ or any of the operator roles (Owner, Co owner, Administrator).
 | `+incidents [n]` | mod | Recent code hits, newest last |
 | `+question <text>` | user | Posts a question and pings Lynx for `+answer` |
 | `+whois <user>` | mod | Join date, roles, strikes |
+| `+devices` | **Lynx only** | Paired phones: name, location, IP, when paired, last seen |
+| `+pair [code]` | owner | Issue a pairing code, or claim one for a phone |
+| `+revoke <id\|all>` | owner | Disconnect one paired phone, or all of them |
+
+`+devices` is Lynx-only because it prints every phone's address. A row looks
+like this:
+
+```
+1. Pixel 8  `5e3417c2`
+  location: Manchester, United Kingdom  `86.14.22.9`
+  paired: 19 Nov 14:02 (2h ago)
+  last seen: 19 Nov 15:58 (6m ago)
+  paired by: @Lynx
+  app: 1.3.0
+```
+
+The location comes from the address the phone paired from. It is a hint, not
+proof: a VPN or mobile carrier will place a device somewhere unexpected, and a
+phone on the same network as the bot shows `local network`.
 
 ## Switches
 

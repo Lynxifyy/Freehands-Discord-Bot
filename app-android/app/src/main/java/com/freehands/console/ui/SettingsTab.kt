@@ -82,12 +82,8 @@ fun SettingsTab(
     ) {
         SectionTitle("Bot features")
 
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = Panel),
-        ) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 4.dp)) {
+        SurfaceCard {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 TOGGLES.forEachIndexed { i, t ->
                     val value = asBool(settings[t.key])
                     Row(
@@ -125,12 +121,8 @@ fun SettingsTab(
         Spacer(Modifier.height(18.dp))
         SectionTitle("Tuning")
 
-        Card(
-            Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = Panel),
-        ) {
-            Column(Modifier.padding(14.dp)) {
+        SurfaceCard {
+            Column(Modifier.padding(16.dp)) {
                 DROPDOWNS.forEach { (key, label, options) ->
                     DropdownRow(
                         label = label,
@@ -147,23 +139,33 @@ fun SettingsTab(
         Spacer(Modifier.height(18.dp))
         SectionTitle("Process")
 
-        Button(
-            onClick = { confirmRestart = true },
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Danger),
-        ) {
-            Text(
-                if (busy) "Restarting..." else "Force restart bot",
-                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp,
-            )
+        SurfaceCard(accent = Danger) {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    "Force restart", color = Color.White, fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Drops the gateway connection and brings the bot back up. " +
+                        "Settings are kept.",
+                    color = Muted, fontSize = 10.sp, lineHeight = 15.sp,
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { confirmRestart = true },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger),
+                ) {
+                    Text(
+                        if (busy) "Restarting..." else "Restart now",
+                        color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                    )
+                }
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Stops the bot process and starts it again. Settings are kept.",
-            color = Muted, fontSize = 10.sp,
-        )
 
         Spacer(Modifier.height(22.dp))
         CreatorCard(creator)

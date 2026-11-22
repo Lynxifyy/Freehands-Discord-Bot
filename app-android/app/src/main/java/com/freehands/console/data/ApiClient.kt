@@ -9,7 +9,13 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class Media(val kind: String, val url: String, val name: String)
+data class Media(
+    val kind: String,
+    val url: String,
+    val name: String,
+    /** Attachment size in bytes, 0 when Discord did not report one. */
+    val size: Long = 0L,
+)
 
 data class LogRow(
     val seq: Int,
@@ -18,6 +24,13 @@ data class LogRow(
     val channel: String,
     val authorId: String,
     val authorName: String,
+    /**
+     * Who performed the action when it is not the author: the person who
+     * deleted a message, or the bot when automod removed it. Empty for a plain
+     * message, where the author is the only actor.
+     */
+    val actorId: String,
+    val actorName: String,
     val text: String,
     val before: String,
     val media: List<Media>,
@@ -150,6 +163,7 @@ class ApiClient(var baseUrl: String, var token: String) {
         (0 until arr.length()).map { i ->
             val r = arr.getJSONObject(i)
             val a = r.optJSONObject("author") ?: JSONObject()
+            val act = r.optJSONObject("actor") ?: JSONObject()
             val mediaArr = r.optJSONArray("media") ?: JSONArray()
             val platArr = r.optJSONArray("platforms") ?: JSONArray()
             LogRow(
@@ -159,11 +173,18 @@ class ApiClient(var baseUrl: String, var token: String) {
                 channel = r.optString("channel"),
                 authorId = a.optString("id"),
                 authorName = a.optString("name"),
+                actorId = act.optString("id"),
+                actorName = act.optString("name"),
                 text = r.optString("text"),
                 before = r.optString("before"),
                 media = (0 until mediaArr.length()).map { m ->
                     val mo = mediaArr.getJSONObject(m)
-                    Media(mo.optString("kind"), mo.optString("url"), mo.optString("name"))
+                    Media(
+                        kind = mo.optString("kind"),
+                        url = mo.optString("url"),
+                        name = mo.optString("name"),
+                        size = mo.optString("size").toLongOrNull() ?: 0L,
+                    )
                 },
                 platforms = (0 until platArr.length()).map { platArr.getString(it) },
                 messageId = r.optString("message_id"),

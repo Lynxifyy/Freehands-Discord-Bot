@@ -205,15 +205,58 @@ class PairCommandTest(unittest.TestCase):
         self.assertEqual(len(self.engine.pairing.pending()), 0)
 
     def test_devices_lists_a_paired_console(self):
+        from freehands.config import LYNX_ID
+
         self._run("+pair")
         code = self.engine.pairing.pending()[0][0]
         self._run(f"+pair {code}")
-        self._run("+devices")
+        self._run("+devices", user_id=LYNX_ID)
         self.assertIn("Paired consoles", self._last())
 
     def test_devices_with_nothing_paired_says_so(self):
-        self._run("+devices")
+        from freehands.config import LYNX_ID
+
+        self._run("+devices", user_id=LYNX_ID)
         self.assertIn("No consoles paired", self._last())
+
+    def test_only_lynx_may_list_devices(self):
+        """The list carries every phone's address, so it is Lynx's alone."""
+        from freehands.config import ARCEUS_ID, OWNER_ID, LYNX_ID
+
+        self._run("+pair")
+        self._run(f"+pair {self.engine.pairing.pending()[0][0]}")
+        for other in (OWNER_ID, ARCEUS_ID):
+            self._run("+devices", user_id=other)
+            self.assertIn("Only Lynx", self._last(), other)
+
+        self._run("+devices", user_id=LYNX_ID)
+        self.assertIn("Paired consoles", self._last())
+
+    def test_devices_shows_location_ip_and_paired_time(self):
+        """A row has to answer "which phone, from where, since when"."""
+        from freehands.config import LYNX_ID
+
+        token = self.engine.pairing.claim(
+            self.engine.pairing.open(),
+            ip="203.0.113.9",
+            location="Manchester, United Kingdom",
+            app_version="1.3.0",
+        )
+        self.assertIsNotNone(token)
+        self._run("+devices", user_id=LYNX_ID)
+        body = self._last()
+        self.assertIn("Manchester, United Kingdom", body)
+        self.assertIn("203.0.113.9", body)
+        self.assertIn("paired:", body)
+        self.assertIn("last seen:", body)
+        self.assertIn("1.3.0", body)
+
+    def test_a_device_that_never_reported_an_address_still_lists(self):
+        from freehands.config import LYNX_ID
+
+        self.engine.pairing.claim(self.engine.pairing.open())
+        self._run("+devices", user_id=LYNX_ID)
+        self.assertIn("unknown", self._last())
 
     def test_revoke_all_disconnects_everything(self):
         self._run("+pair")

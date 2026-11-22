@@ -143,6 +143,9 @@ class EventLog:
             "type": "",
             "channel": "",
             "author": {"id": "", "name": ""},
+            # Who performed the action, when that differs from the author:
+            # the deleter on a delete, the moderator on a purge.
+            "actor": {"id": "", "name": ""},
             "text": "",
             "before": "",
             "media": [],
@@ -189,13 +192,28 @@ class EventLog:
             "message_id": str(msg.get("id") or ""),
         })
 
-    def deleted(self, data: dict[str, Any], cached: dict[str, Any] | None = None) -> dict[str, Any]:
-        """A delete event carries only ids, so the text comes from the cache."""
+    def deleted(self, data: dict[str, Any], cached: dict[str, Any] | None = None,
+                actor: dict[str, str] | None = None) -> dict[str, Any]:
+        """A delete event carries only ids, so everything else is recovered.
+
+        Two different people matter here and they are easy to confuse:
+
+        * `author` is whoever wrote the message, taken from our own cache.
+        * `actor` is whoever pressed delete - the person, or the bot when
+          automod removed it. The gateway event does not say, so the caller
+          resolves it from the audit log and passes it in.
+
+        Leaving both empty is what made the console print "unknown deleted a
+        message": it was showing the *author* slot, which a delete event never
+        fills.
+        """
         author = (cached or {}).get("author") or {}
+        who = actor or {}
         return self._append({
             "type": "delete",
             "channel": str(data.get("channel_id") or ""),
             "author": {"id": str(author.get("id") or ""), "name": author.get("name") or ""},
+            "actor": {"id": str(who.get("id") or ""), "name": str(who.get("name") or "")},
             "text": (cached or {}).get("text") or "",
             "media": (cached or {}).get("media") or [],
             "message_id": str(data.get("id") or ""),
@@ -244,6 +262,11 @@ class EventLog:
         for r in rows:
             out[r.get("type", "?")] = out.get(r.get("type", "?"), 0) + 1
         return out
+
+    def author_of(self, message_id: str) -> dict[str, str] | None:
+        """The author recorded for a message, or None when we never saw it."""
+        row = self.find_message(message_id)
+        return (row or {}).get("author") or None
 
     def find_message(self, message_id: str) -> dict[str, Any] | None:
         """Look up a cached message so a later delete can show what was said."""

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 
-from .config import ALLOWED_OPS
+from .config import ALLOWED_OPS, LYNX_ID
 from .log import log
 
 
@@ -61,18 +61,56 @@ def pair(engine, command, user_id, message_id, channel_id, roles):
     log.info("device %s paired by %s", device.id, user_id)
 
 
+def _stamp(seconds: float) -> str:
+    """Absolute time as well as an age: "14:32, 2h ago".
+
+    An age alone is useless for "was that before or after I changed my
+    password", which is exactly the question this command answers.
+    """
+    if not seconds:
+        return "never"
+    when = time.strftime("%d %b %H:%M", time.gmtime(seconds))
+    return f"{when} ({_age(time.time() - seconds)} ago)"
+
+
+def _where(d) -> str:
+    ip = d.last_ip or d.ip or ""
+    place = d.location
+    if ip and place:
+        return f"{place}  `{ip}`"
+    if ip:
+        return f"`{ip}`"
+    return place or "unknown"
+
+
 def devices(engine, command, user_id, message_id, channel_id, roles):
+    """Who can control this bot, from where, and since when.
+
+    Lynx-only: this is the full access list, including the address each phone
+    paired from, and it should not be readable by every co-owner. The gate is
+    in the command spec too; this check keeps the handler safe on its own.
+    """
+    if user_id != LYNX_ID:
+        engine.reply(channel_id, message_id, "Only Lynx can see the device list.")
+        return
+
     rows = sorted(engine.pairing.devices.values(), key=lambda d: d.created)
     if not rows:
         engine.reply(channel_id, message_id,
                      "No consoles paired. Run `+pair` to issue a code.")
         return
-    lines = [f"**Paired consoles** ({len(rows)})", ""]
-    now = time.time()
-    for d in rows:
-        seen = f"{_age(now - d.last_seen)} ago" if d.last_seen else "never used"
-        lines.append(f"`{d.id}` **{d.name}** — paired {_age(now - d.created)} ago, last seen {seen}")
-    lines.append("")
+
+    lines = [f"**Paired consoles** — {len(rows)}", ""]
+    for i, d in enumerate(rows, 1):
+        lines.append(f"**{i}. {d.name}**  `{d.id}`")
+        lines.append(f"  location: {_where(d)}")
+        lines.append(f"  paired: {_stamp(d.created)}")
+        lines.append(f"  last seen: {_stamp(d.last_seen)}")
+        if d.paired_by:
+            lines.append(f"  paired by: <@{d.paired_by}>")
+        if d.app_version:
+            lines.append(f"  app: {d.app_version}")
+        lines.append("")
     lines.append("`+revoke <id>` disconnects one. `+revoke all` disconnects every device.")
     engine.reply(channel_id, message_id, "\n".join(lines))
 
