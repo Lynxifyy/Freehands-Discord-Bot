@@ -38,6 +38,9 @@ class Spec:
     usage: str = ""
     summary: str = ""
     aliases: tuple[str, ...] = ()
+    # Plain-English explanation shown by the console app when a command is
+    # tapped. `summary` is the one-line list label; this is the full text.
+    detail: str = ""
     cooldown: float = 0.0
     only_user: int | None = None   # when set, nobody else may run this command
 
@@ -82,6 +85,11 @@ class Registry:
         self.specs[spec.name] = spec
         for alias in spec.aliases:
             self._alias[alias] = spec.name
+
+    def all(self) -> list[Spec]:
+        """Every registered command, owner tier first then alphabetical."""
+        order = {"owner": 0, "admin": 1, "mod": 2, "user": 3}
+        return sorted(self.specs.values(), key=lambda s: (order.get(s.tier, 9), s.name))
 
     def resolve(self, name: str) -> Spec | None:
         if name in self.specs:
