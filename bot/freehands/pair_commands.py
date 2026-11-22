@@ -31,7 +31,7 @@ def pair(engine, command, user_id, message_id, channel_id, roles):
         return
 
     if not command.args:
-        code = engine.pairing.open("console")
+        code = engine.pairing.open("console", opened_by=str(user_id))
         engine.reply(
             channel_id, message_id,
             f"Pairing code `{code}` — valid for 5 minutes.\n"
@@ -102,8 +102,13 @@ def devices(engine, command, user_id, message_id, channel_id, roles):
 
     lines = [f"**Paired consoles** — {len(rows)}", ""]
     for i, d in enumerate(rows, 1):
-        lines.append(f"**{i}. {d.name}**  `{d.id}`")
-        lines.append(f"  location: {_where(d)}")
+        sticker = "  \U0001F3F7 Freehands" if d.sticker == "freehands" else ""
+        lines.append(f"**{i}. {d.name}**  `{d.id}`{sticker}")
+        if d.owner_label:
+            # A team console never has an address to show: it was never stored.
+            lines.append(f"  {d.owner_label}")
+        else:
+            lines.append(f"  location: {_where(d)}")
         lines.append(f"  paired: {_stamp(d.created)}")
         lines.append(f"  last seen: {_stamp(d.last_seen)}")
         if d.paired_by:

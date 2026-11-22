@@ -95,6 +95,9 @@ class Settings:
     automod: bool = True
     watch_enabled: bool = True
     codes_enabled: bool = True
+    # Flattering replies when Lynx is mentioned. On by default: it is a joke,
+    # and a joke that has to be switched on first never gets switched on.
+    glaze_enabled: bool = True
     lockdown: bool = False
     punish_strikes_to_lock: int = 3
     spam_window: float = 6.0
@@ -125,6 +128,7 @@ class Settings:
             "automod": self.automod,
             "watch_enabled": self.watch_enabled,
             "codes_enabled": self.codes_enabled,
+            "glaze_enabled": self.glaze_enabled,
             "lockdown": self.lockdown,
             "punish_strikes_to_lock": self.punish_strikes_to_lock,
             "spam_window": self.spam_window,

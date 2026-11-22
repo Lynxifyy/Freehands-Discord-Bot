@@ -29,6 +29,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Loop
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.WarningAmber
@@ -67,6 +68,7 @@ import com.freehands.console.ui.CommandsTab
 import com.freehands.console.ui.Danger
 import com.freehands.console.ui.Ink
 import com.freehands.console.ui.LogTab
+import com.freehands.console.ui.LoopsTab
 import com.freehands.console.ui.Muted
 import com.freehands.console.ui.MutedDim
 import com.freehands.console.ui.Panel
@@ -206,7 +208,8 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                     val items = listOf(
                         Triple("Live", Icons.Rounded.Bolt, 0),
                         Triple("Commands", Icons.Rounded.Terminal, 1),
-                        Triple("Settings", Icons.Rounded.Tune, 2),
+                        Triple("Loops", Icons.Rounded.Loop, 2),
+                        Triple("Settings", Icons.Rounded.Tune, 3),
                     )
                     items.forEach { (label, icon, i) ->
                         val active = tab == i
@@ -272,6 +275,17 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                             onDismissTest = vm::clearTest,
                         )
                         1 -> CommandsTab(commands = state.commands)
+                        2 -> LoopsTab(
+                            people = state.people,
+                            loops = state.loops,
+                            notice = state.notice,
+                            onRefresh = vm::loadLoops,
+                            onArm = { kind, target, passes, interval, reason, notify ->
+                                vm.armLoop(kind, target, passes, interval, reason, notify)
+                            },
+                            onStop = vm::stopLoop,
+                            onDismissNotice = vm::clearNotice,
+                        )
                         else -> SettingsTab(
                             settings = state.settings,
                             creator = state.creator,
@@ -279,6 +293,10 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                             onToggle = { k, v -> vm.setSetting(k, v) },
                             onSelect = { k, v -> vm.setSetting(k, v) },
                             onForceRestart = vm::forceRestart,
+                            powers = state.powers,
+                            powerNotice = state.notice,
+                            onOpenPowers = vm::loadPowers,
+                            onSetPower = { k, on, c -> vm.setPower(k, on, c) },
                         )
                     }
                 }

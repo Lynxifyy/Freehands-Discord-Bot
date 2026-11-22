@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .devices import identify
+
 # No 0/O, 1/I/L: those are the pairs people mistype when copying from a screen.
 CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 CODE_LENGTH = 6
@@ -60,6 +62,12 @@ class Device:
     last_ip: str = ""
     # Which app build paired, so a stale install is visible in the list.
     app_version: str = ""
+    # Hardware model, used to recognise team-owned consoles.
+    model: str = ""
+    # Set when the console belongs to the team rather than a person. Such a
+    # device never stores its address: see `claim`.
+    owner_label: str = ""
+    sticker: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -73,6 +81,9 @@ class Device:
             "location": self.location,
             "last_ip": self.last_ip,
             "app_version": self.app_version,
+            "model": self.model,
+            "owner_label": self.owner_label,
+            "sticker": self.sticker,
         }
 
     @staticmethod
@@ -88,6 +99,9 @@ class Device:
             location=str(raw.get("location", "")),
             last_ip=str(raw.get("last_ip", "")),
             app_version=str(raw.get("app_version", "")),
+            model=str(raw.get("model", "")),
+            owner_label=str(raw.get("owner_label", "")),
+            sticker=str(raw.get("sticker", "")),
         )
 
 
@@ -116,8 +130,13 @@ class Pairing:
         for code in [c for c, row in self._pending.items() if now - row["created"] > CODE_TTL]:
             self._pending.pop(code, None)
 
-    def open(self, name: str = "") -> str:
-        """Create a code for a device to present. Returns the code itself."""
+    def open(self, name: str = "", opened_by: str = "") -> str:
+        """Create a code for a device to present. Returns the code itself.
+
+        `opened_by` is the operator who ran `+pair`. It is carried onto the
+        device when the code is claimed, so the console knows which Discord
+        account it acts for without the app having to claim an identity.
+        """
         self._expire()
         # Drop the oldest rather than refuse: an abandoned pairing attempt
         # should not block a new one.
@@ -125,7 +144,11 @@ class Pairing:
             oldest = min(self._pending, key=lambda c: self._pending[c]["created"])
             self._pending.pop(oldest, None)
         code = new_code()
-        self._pending[code] = {"name": (name or "device")[:40], "created": time.time()}
+        self._pending[code] = {
+            "name": (name or "device")[:40],
+            "created": time.time(),
+            "opened_by": str(opened_by or ""),
+        }
         return code
 
     def pending(self) -> list[tuple[str, dict[str, Any]]]:
@@ -137,7 +160,8 @@ class Pairing:
 
     # -- claiming ---------------------------------------------------------
     def claim(self, code: str, paired_by: str = "", name: str = "",
-              ip: str = "", location: str = "", app_version: str = "") -> str | None:
+              ip: str = "", location: str = "", app_version: str = "",
+              model: str = "") -> str | None:
         """Consume a code and return the new device token, or None.
 
         The caller shows the token to the operator once. It is not recoverable
@@ -149,15 +173,24 @@ class Pairing:
             return None
         token = secrets.token_urlsafe(32)
         device_id = secrets.token_hex(4)
+        known = identify(model, name=name)
         self.devices[device_id] = Device(
             id=device_id,
             name=(name.strip()[:40] or row["name"]),
             token_hash=_hash(token),
-            paired_by=paired_by,
-            ip=ip,
-            location=location,
-            last_ip=ip,
+            # The operator who opened the code owns the device unless the claim
+            # named someone explicitly.
+            paired_by=paired_by or str(row.get("opened_by") or ""),
+            # A team-owned console records no address at all. Dropping it here,
+            # rather than hiding it at display time, means it is never written
+            # to the state file in the first place.
+            ip="" if known else ip,
+            location="" if known else location,
+            last_ip="" if known else ip,
             app_version=app_version[:24],
+            model=(model or "")[:24],
+            owner_label=known.describe() if known else "",
+            sticker=known.sticker if known else "",
         )
         self._save()
         return token

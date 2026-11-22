@@ -19,6 +19,20 @@ DETAILS: dict[str, str] = {
     "automod": "Turns automatic moderation on or off. When it is on, the bot "
                "deletes spam, invites, slurs and mass mentions on its own without "
                "waiting for you.",
+    "glaze": "Turns the flattering replies on or off. When it is on, any message "
+             "that mentions Lynx gets one admiring line back, at most once every "
+             "45 seconds per channel, and never the same line twice in a row.",
+    "loopban": "Bans the same member again and again on a timer. You choose how "
+               "many passes and how far apart. It always ends by itself: there is "
+               "no option to run forever. The owner and Lynx cannot be targeted.",
+    "loopkick": "Kicks the same member again and again on a timer, for someone who "
+                "keeps rejoining but should not be permanently banned. Same limits "
+                "as +loopban: a pass count, an interval, and no protected targets.",
+    "loops": "Lists every loop that is armed, how many passes it has done, and "
+             "whether it is still running. Use it to check what is still firing "
+             "before you leave.",
+    "loopstop": "Stops one loop by its id, or every loop at once with +loopstop "
+                "all. Loops also stop on their own when they run out of passes.",
     "ban": "Bans a member with an optional reason. While ban protection is on this "
             "does not ban straight away. It queues the ban and asks for +approve.",
     "clearstrikes": "Resets a member's strike count to zero. Strikes add up from "

@@ -38,6 +38,44 @@ data class LogRow(
     val messageId: String,
 )
 
+/** Someone who can reach the bot, labelled by the power they hold. */
+data class Person(
+    val id: String,
+    val name: String,
+    val display: String,
+    val tier: String,
+    /** Human tier label, e.g. "Owner of Freehands". */
+    val label: String,
+    val avatar: String,
+    /** Lynx owns Freehands, so destructive actions cannot target him. */
+    val protected: Boolean,
+    val reason: String,
+)
+
+/** An armed loop: a ban or kick that repeats on a timer. */
+data class LoopInfo(
+    val id: String,
+    val kind: String,
+    val target: String,
+    val reason: String,
+    val interval: Double,
+    val passes: Int,
+    val fired: Int,
+    val running: Boolean,
+    val stopped: String,
+    val lastError: String,
+)
+
+/** One owner-power switch. */
+data class Power(
+    val key: String,
+    val name: String,
+    val blurb: String,
+    val kind: String,
+    val confirm: Boolean,
+    val on: Boolean,
+)
+
 data class CommandInfo(
     val name: String,
     val usage: String,
@@ -232,11 +270,14 @@ class ApiClient(var baseUrl: String, var token: String) {
      * This is the only unauthenticated call: the code is the credential, and
      * it can only have come from an operator running `+pair` in the server.
      */
-    suspend fun pair(code: String, deviceName: String): String = withContext(Dispatchers.IO) {
+    suspend fun pair(code: String, deviceName: String, model: String = ""): String =
+        withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("action", "claim")
             .put("code", code)
             .put("name", deviceName)
+            // Build.MODEL is stable per hardware model; the display name is not.
+            .put("model", model)
             .toString()
         val c = URL(baseUrl.trimEnd('/') + "/api/pair").openConnection() as HttpURLConnection
         c.requestMethod = "POST"
@@ -283,4 +324,118 @@ class ApiClient(var baseUrl: String, var token: String) {
             )
         }.getOrNull()
     }
+
+    suspend fun people(): List<Person> = withContext(Dispatchers.IO) {
+        val o = JSONObject(read(conn("/api/people", "GET", null)))
+        val arr = o.optJSONArray("people") ?: JSONArray()
+        (0 until arr.length()).map { i ->
+            val p = arr.getJSONObject(i)
+            Person(
+                id = p.optString("id"),
+                name = p.optString("name"),
+                display = p.optString("display"),
+                tier = p.optString("tier"),
+                label = p.optString("label"),
+                avatar = p.optString("avatar"),
+                protected = p.optBoolean("protected", false),
+                reason = p.optString("reason"),
+            )
+        }
+    }
+
+    suspend fun loops(): List<LoopInfo> = withContext(Dispatchers.IO) {
+        val o = JSONObject(read(conn("/api/loops", "GET", null)))
+        val arr = o.optJSONArray("loops") ?: JSONArray()
+        (0 until arr.length()).map { i ->
+            val l = arr.getJSONObject(i)
+            LoopInfo(
+                id = l.optString("id"),
+                kind = l.optString("kind"),
+                target = l.optString("target"),
+                reason = l.optString("reason"),
+                interval = l.optDouble("interval", 60.0),
+                passes = l.optInt("passes", 1),
+                fired = l.optInt("fired", 0),
+                running = l.optBoolean("running", false),
+                stopped = l.optString("stopped"),
+                lastError = l.optString("last_error"),
+            )
+        }
+    }
+
+    /** Arms a loop. Returns the new loop, or throws with the server's reason. */
+    suspend fun armLoop(
+        kind: String,
+        target: String,
+        passes: Int,
+        intervalSeconds: Int,
+        reason: String,
+        notify: Boolean,
+    ): LoopInfo = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("kind", kind)
+            .put("target", target)
+            .put("passes", passes)
+            .put("interval", intervalSeconds)
+            .put("reason", reason)
+            .put("notify", notify)
+            .toString()
+        val l = JSONObject(read(conn("/api/loops", "POST", body))).optJSONObject("loop")
+            ?: throw IOException("loop was not armed")
+        LoopInfo(
+            id = l.optString("id"),
+            kind = l.optString("kind"),
+            target = l.optString("target"),
+            reason = l.optString("reason"),
+            interval = l.optDouble("interval", 60.0),
+            passes = l.optInt("passes", 1),
+            fired = l.optInt("fired", 0),
+            running = l.optBoolean("running", false),
+            stopped = l.optString("stopped"),
+            lastError = l.optString("last_error"),
+        )
+    }
+
+    suspend fun stopLoop(id: String): Boolean = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("id", id).toString()
+        JSONObject(read(conn("/api/loops/stop", "POST", body))).optBoolean("ok", false)
+    }
+
+    /** The owner panel, or null when this account is not Lynx. */
+    suspend fun ownerPanel(): List<Power>? = withContext(Dispatchers.IO) {
+        runCatching {
+            val o = JSONObject(read(conn("/api/owner", "GET", null)))
+            if (!o.optBoolean("ok", false)) return@runCatching null
+            val arr = o.optJSONArray("powers") ?: JSONArray()
+            (0 until arr.length()).map { i ->
+                val p = arr.getJSONObject(i)
+                Power(
+                    key = p.optString("key"),
+                    name = p.optString("name"),
+                    blurb = p.optString("blurb"),
+                    kind = p.optString("kind"),
+                    confirm = p.optBoolean("confirm", false),
+                    on = p.optBoolean("on", false),
+                )
+            }
+        }.getOrNull()
+    }
+
+    suspend fun setPower(
+        key: String,
+        on: Boolean,
+        confirm: String = "",
+    ): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject()
+                .put("key", key)
+                .put("on", on)
+                .put("confirm", confirm)
+                .toString()
+            val o = JSONObject(read(conn("/api/owner", "POST", body)))
+            if (o.optBoolean("ok", false)) o.optString("detail").ifBlank { null }
+            else o.optString("error").ifBlank { "refused" }
+        }.getOrNull()
+    }
+
 }
