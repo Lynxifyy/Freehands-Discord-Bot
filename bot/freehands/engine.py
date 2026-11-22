@@ -29,6 +29,7 @@ from .config import (
     TRACKED_CHANNELS,
     WATCH_ID,
 )
+from .events import EventLog
 from .log import log, stats
 from .moderation import Moderator
 from .ops import AlertRoom, OpsChannel
@@ -63,6 +64,9 @@ class Engine:
         self.ops = OpsChannel(rest, store)
         self.rooms: dict[int, AlertRoom] = {}
         self.tempown = TempOwnership(rest, store)
+        # The console feed. Bounded in memory and mirrored to a capped file so a
+        # long-running bot cannot fill the disk with chat history.
+        self.events = EventLog(store.path.parent / "events.jsonl")
         if self.ops.channel_id:
             self.channels.add(self.ops.channel_id)
         for cid in (store.settings.room_channels or {}).values():
@@ -93,6 +97,9 @@ class Engine:
             "MEMBER_ADD": self.on_member_add,
             "MEMBER_REMOVE": self.on_member_remove,
             "GUILD_BAN_ADD": self.on_ban_add,
+            "MESSAGE_DELETE": self.on_message_delete,
+            "MESSAGE_UPDATE": self.on_message_update,
+            "PRESENCE_UPDATE": self.on_presence,
         }.get(name)
         if handler:
             handler(data)
@@ -117,6 +124,9 @@ class Engine:
         roles = self.roles_for(user_id, msg.get("member"))
         self._member_roles[user_id] = roles
         stats.bump("messages")
+        # Log before any early return: the console should see what was said even
+        # when moderation deletes it a moment later.
+        self.events.message(msg, content)
 
         # An alert room is a private channel with a fixed member list. Anyone
         # else is evicted before they can speak, exactly like the ops channel.
@@ -156,6 +166,27 @@ class Engine:
             command = parse(content)
             if command:
                 self.dispatch(command, user_id, message_id, channel_id, roles)
+
+    def on_message_delete(self, data: dict[str, Any]) -> None:
+        """Attach the deleted text from the cache.
+
+        Discord's delete event carries only channel and message ids, so the
+        content has to come from what we logged when it was posted.
+        """
+        mid = str(data.get("id") or "")
+        self.events.deleted(data, self.events.find_message(mid))
+
+    def on_message_update(self, data: dict[str, Any]) -> None:
+        mid = str(data.get("id") or "")
+        cached = self.events.find_message(mid) or {}
+        old = cached.get("text") or ""
+        new = data.get("content") or ""
+        if old == new:
+            return
+        self.events.edited(data, old)
+
+    def on_presence(self, data: dict[str, Any]) -> None:
+        self.events.presence(data)
 
     # -- alert rooms ------------------------------------------------------
     def _room_ids(self) -> set[int]:

@@ -20,7 +20,12 @@ import threading
 import time
 import urllib.parse
 
-from .config import INTENTS, INTENT_GUILD_MEMBERS, INTENT_MESSAGE_CONTENT
+from .config import (
+    INTENTS,
+    INTENT_GUILD_MEMBERS,
+    INTENT_GUILD_PRESENCES,
+    INTENT_MESSAGE_CONTENT,
+)
 from .log import log
 
 OP_DISPATCH = 0
@@ -258,7 +263,11 @@ class Gateway:
                 if "4014" in str(exc):
                     # The app lacks a privileged intent. Drop them and retry at
                     # once; content is hydrated over REST instead.
-                    stripped = self.intents & ~(INTENT_GUILD_MEMBERS | INTENT_MESSAGE_CONTENT)
+                    stripped = self.intents & ~(
+                        INTENT_GUILD_MEMBERS
+                        | INTENT_MESSAGE_CONTENT
+                        | INTENT_GUILD_PRESENCES
+                    )
                     if stripped != self.intents:
                         log.warning("privileged intents unavailable; retrying without them")
                         self.intents = stripped

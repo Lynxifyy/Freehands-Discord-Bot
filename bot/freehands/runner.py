@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .codebook import Codebook
 from .config import GUILD_ID, MAIN_CHAT_ID, env_flag
+from .console import BotApi
 from .engine import Engine
 from .gateway import Gateway
 from .log import log, stats
@@ -88,6 +89,11 @@ def run() -> None:
         store.settings.codes_enabled, env_flag("FH_GATEWAY", True),
     )
     prime(engine)
+
+    # The console API runs inside this process so settings changes land on the
+    # live objects instead of being overwritten by the next state save.
+    api = BotApi(engine)
+    api.start()
 
     seen = {int(m["id"]) for m in rest.messages(MAIN_CHAT_ID, limit=25)}
     gateway = None

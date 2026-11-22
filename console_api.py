@@ -1,0 +1,239 @@
+"""Public control API for the Freehands console app.
+
+This is the only process that listens on a public port. It owns the bot's
+lifecycle (start, stop, restart) and forwards reads and setting changes to the
+bot's loopback API, so the process holding the Discord token is never directly
+reachable from the network.
+
+Auth is a bearer token. Without `FH_CONSOLE_TOKEN` set the server refuses to
+start rather than expose an unauthenticated remote control for a Discord bot.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parent
+BOT_DIR = ROOT / "bot"
+PIDFILE = BOT_DIR / "freehands.pid"
+BOT_API = "http://127.0.0.1:8791"
+DEFAULT_PORT = 8790
+
+
+def _token() -> str:
+    return os.environ.get("FH_CONSOLE_TOKEN", "").strip()
+
+
+def _is_bot(pid: int) -> bool:
+    """True only when `pid` is really this bot.
+
+    A bare `kill(pid, 0)` is not enough: if the bot died the PID can be reused
+    by an unrelated process, and stopping would then kill the wrong thing.
+    """
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    return b"freehands" in cmdline
+
+
+def _read_pid() -> int | None:
+    try:
+        pid = int(PIDFILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    if not _is_bot(pid):
+        # Stale or recycled: drop the file so the next start is clean.
+        try:
+            PIDFILE.unlink()
+        except OSError:
+            pass
+        return None
+    return pid
+
+
+def _alive() -> bool:
+    return _read_pid() is not None
+
+
+def _start() -> dict[str, Any]:
+    if _alive():
+        return {"ok": True, "already": True, "pid": _read_pid()}
+    BOT_DIR.mkdir(parents=True, exist_ok=True)
+    log = (BOT_DIR / "freehands.log").open("a")
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "freehands"],
+        cwd=str(BOT_DIR), stdout=log, stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL, start_new_session=True,
+    )
+    PIDFILE.write_text(str(proc.pid))
+    for _ in range(40):
+        if _bot_api_up():
+            break
+        time.sleep(0.5)
+    return {"ok": True, "pid": proc.pid}
+
+
+def _stop() -> dict[str, Any]:
+    pid = _read_pid()
+    if pid is None:
+        return {"ok": True, "already": True}
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    for _ in range(40):
+        if _read_pid() is None:
+            break
+        time.sleep(0.25)
+    try:
+        PIDFILE.unlink()
+    except OSError:
+        pass
+    return {"ok": True, "stopped": pid}
+
+
+def _restart() -> dict[str, Any]:
+    _stop()
+    time.sleep(1.0)
+    return _start()
+
+
+def _bot_api_up() -> bool:
+    try:
+        with urllib.request.urlopen(f"{BOT_API}/api/status", timeout=2) as r:
+            return r.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def _proxy(path: str, method: str = "GET", body: dict | None = None) -> tuple[int, Any]:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"{BOT_API}{path}", data=data, method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read() or b"{}")
+        except ValueError:
+            return exc.code, {"error": "upstream error"}
+    except (urllib.error.URLError, OSError):
+        return 503, {"error": "bot is not running", "running": False}
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "FreehandsConsole/1.0"
+
+    def log_message(self, *_args) -> None:
+        pass
+
+    def _send(self, status: int, payload: Any) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        # No wildcard origin: the only client is the Android app, which is not
+        # subject to CORS. Allowing every site would let a page in the
+        # operator's browser probe this endpoint.
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _authed(self) -> bool:
+        expected = _token()
+        got = (self.headers.get("Authorization") or "").replace("Bearer ", "").strip()
+        if not expected:
+            return False
+        # Constant-time compare: a remote control endpoint should not leak the
+        # token length or a matching prefix through response timing.
+        if len(got) != len(expected):
+            return False
+        diff = 0
+        for a, b in zip(got, expected):
+            diff |= ord(a) ^ ord(b)
+        return diff == 0
+
+    def _body(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        if not length:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return {}
+
+    def do_OPTIONS(self) -> None:
+        self._send(204, {})
+
+    def do_GET(self) -> None:
+        path = self.path.split("?")[0]
+        if path == "/health":
+            return self._send(200, {"ok": True})
+        if not self._authed():
+            return self._send(401, {"error": "unauthorized"})
+        if path == "/api/power":
+            return self._send(200, {"running": _alive(), "pid": _read_pid()})
+        query = ("?" + self.path.split("?", 1)[1]) if "?" in self.path else ""
+        if path in ("/api/status", "/api/log", "/api/commands", "/api/settings"):
+            status, payload = _proxy(path + query)
+            return self._send(status, payload)
+        return self._send(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        if not self._authed():
+            return self._send(401, {"error": "unauthorized"})
+        path = self.path.split("?")[0]
+        body = self._body()
+        if path == "/api/power":
+            action = (body.get("action") or "").lower()
+            if action == "start":
+                return self._send(200, _start())
+            if action == "stop":
+                return self._send(200, _stop())
+            if action in ("restart", "force_restart"):
+                return self._send(200, _restart())
+            return self._send(400, {"error": "action must be start, stop or restart"})
+        return self._send(404, {"error": "not found"})
+
+    def do_PATCH(self) -> None:
+        if not self._authed():
+            return self._send(401, {"error": "unauthorized"})
+        if self.path.split("?")[0] == "/api/settings":
+            status, payload = _proxy("/api/settings", "PATCH", self._body())
+            return self._send(status, payload)
+        return self._send(404, {"error": "not found"})
+
+
+def main() -> int:
+    if not _token():
+        print("FH_CONSOLE_TOKEN is not set; refusing to expose an open control API.")
+        return 2
+    port = int(os.environ.get("FH_CONSOLE_PORT", DEFAULT_PORT))
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server.daemon_threads = True
+    print(f"Freehands console API on 0.0.0.0:{port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

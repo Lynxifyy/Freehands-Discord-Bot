@@ -78,6 +78,7 @@ TRACKED_CHANNELS = frozenset({MAIN_CHAT_ID})
 # `engine` re-reads content over REST, which is not intent-gated.
 INTENTS = (1 << 0) | (1 << 9) | (1 << 2)
 INTENT_GUILD_MEMBERS = 1 << 1
+INTENT_GUILD_PRESENCES = 1 << 8
 INTENT_MESSAGE_CONTENT = 1 << 15
 
 API = "https://discord.com/api/v10"
@@ -108,6 +109,10 @@ class Settings:
     # Dyllan watch. `watch_enabled` is the master switch for the feature;
     # `watch_armed` is what code 11 turns on and what actually logs his traffic.
     watch_armed: bool = False
+    # Presence needs the privileged GUILD_PRESENCES intent, which this app does
+    # not have. Off by default: enabling it without the intent granted makes
+    # Identify close with 4014, and the gateway then drops it again.
+    presence_enabled: bool = False
     # A live temporary-ownership grant, or None. Kept here so it survives a
     # restart with its original deadline instead of becoming permanent.
     temp_grant: dict | None = None
@@ -130,6 +135,7 @@ class Settings:
             "ops_channel_id": self.ops_channel_id,
             "room_channels": self.room_channels,
             "watch_armed": self.watch_armed,
+            "presence_enabled": self.presence_enabled,
             "temp_grant": self.temp_grant,
         }
 
