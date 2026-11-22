@@ -26,6 +26,7 @@ from freehands.config import (
     OWNER_ID,
     ROLE_CO_OWNER,
     ROLE_MOD,
+    DYLLAN_ID,
     ROLE_ETERNAL,
     SPY_ID,
     WATCH_ID,
@@ -377,7 +378,7 @@ class AutomodTests(unittest.TestCase):
         self.engine.on_message(message(LYNX_ID, "punish dyllan"))
         self.assertEqual(self.rest.timeouts, [])
         self.engine.on_message(message(LYNX_ID, f"<@{BOT_ID}> punish dyllan", message_id=2))
-        self.assertEqual(self.rest.timeouts[0][0], WATCH_ID)
+        self.assertEqual(self.rest.timeouts[0][0], DYLLAN_ID)
 
     def test_punish_from_non_operator_is_ignored(self):
         self.engine.on_message(message(4444, f"<@{BOT_ID}> punish dyllan"))
@@ -909,6 +910,143 @@ class AlertRoomTests(unittest.TestCase):
         self.assertEqual(self.rest.sent[0]["channel"], self.engine.ops.channel_id)
         self.assertFalse(any(str(r["name"]).startswith("alert-10")
                              for r in self.rest.created_channels))
+
+
+class DemoteTests(unittest.TestCase):
+    """`+demote` strips everything, says why to the victim, and tells the owner."""
+
+    VICTIM = 555000111222333444
+    REASON = "bullying and cosigning"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+        self.rest.members[self.VICTIM] = {
+            "user": {"id": str(self.VICTIM), "username": "z_nyxx"},
+            "nick": None,
+            "roles": [str(ROLE_ETERNAL), str(ROLE_MOD), "1234"],
+        }
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, content, uid=LYNX_ID):
+        self.engine.on_message(message(uid, content))
+        return self.rest.replies[-1]["content"] if self.rest.replies else ""
+
+    def _roles(self):
+        return set(self.rest.members[self.VICTIM]["roles"])
+
+    # -- the strip --------------------------------------------------------
+    def test_strips_every_role_including_the_floor(self):
+        """Unlike +bankrupt, a demotion is a full demotion: no role survives."""
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        self.assertEqual(self._roles(), set())
+
+    def test_records_the_removed_roles(self):
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        removed = {rid for uid, rid in self.rest.role_removed if uid == self.VICTIM}
+        self.assertEqual(removed, {ROLE_ETERNAL, ROLE_MOD, 1234})
+
+    def test_saves_a_snapshot_so_restore_can_undo_it(self):
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        snap = self.engine.store.snapshots.get(str(self.VICTIM))
+        self.assertIsNotNone(snap)
+        self.assertIn(ROLE_MOD, snap)
+
+    # -- telling people ---------------------------------------------------
+    def test_the_victim_is_told_the_reason(self):
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        dms = [d for d in self.rest.dms if d["user"] == self.VICTIM]
+        self.assertEqual(len(dms), 1)
+        self.assertIn(self.REASON, dms[0]["content"])
+        self.assertIn("removed", dms[0]["content"].lower())
+
+    def test_the_owner_is_pinged_with_the_reason(self):
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        posted = self.rest.sent[-1]["content"]
+        self.assertIn(f"<@{OWNER_ID}>", posted)
+        self.assertIn(self.REASON, posted)
+
+    def test_the_owner_mention_is_actually_allowed(self):
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        mentions = self.rest.sent[-1]["allowed_mentions"]["users"]
+        self.assertEqual(mentions, [str(OWNER_ID)])
+
+    def test_the_owner_also_gets_a_dm(self):
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        dms = [d for d in self.rest.dms if d["user"] == OWNER_ID]
+        self.assertEqual(len(dms), 1)
+        self.assertIn(self.REASON, dms[0]["content"])
+
+    def test_reports_when_the_victims_dms_are_closed(self):
+        self.rest.dm_open = False
+        self._run(f"+demote <@{self.VICTIM}> {self.REASON}")
+        self.assertIn("DMs are closed", self.rest.sent[-1]["content"])
+
+    # -- guards -----------------------------------------------------------
+    def test_a_reason_is_required(self):
+        out = self._run(f"+demote <@{self.VICTIM}>")
+        self.assertIn("reason is required", out.lower())
+        self.assertEqual(self.rest.role_removed, [])
+
+    def test_protected_operators_cannot_be_demoted(self):
+        self.rest.members[OWNER_ID] = {"user": {"id": str(OWNER_ID)}, "roles": ["1234"]}
+        out = self._run(f"+demote <@{OWNER_ID}> {self.REASON}")
+        self.assertIn("protected", out)
+        self.assertEqual(self.rest.role_removed, [])
+
+    def test_a_moderator_cannot_run_it(self):
+        out = self._run(f"+demote <@{self.VICTIM}> {self.REASON}", uid=self.VICTIM)
+        self.assertEqual(self.rest.role_removed, [])
+
+    def test_a_plain_member_cannot_run_it(self):
+        self.rest.members[777000222333444555] = {
+            "user": {"id": "777000222333444555"}, "roles": [],
+        }
+        out = self._run(f"+demote <@{self.VICTIM}> {self.REASON}", uid=777000222333444555)
+        self.assertEqual(self.rest.role_removed, [])
+
+    def test_nobody_can_demote_the_bot(self):
+        out = self._run(f"+demote <@{BOT_ID}> {self.REASON}")
+        self.assertIn("not going to demote myself", out)
+
+
+class WatchTargetTests(unittest.TestCase):
+    """The watch follows z_nyxx, and punishing Dyllan is a separate thing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine, self.rest = build_engine(self.tmp.name)
+        self.engine.ensure_ops()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_watch_target_is_z_nyxx(self):
+        self.assertEqual(WATCH_ID, 1566512766066491642)
+
+    def test_watch_logs_messages_from_z_nyxx(self):
+        self.engine.arm_watch(True)
+        self.engine.on_message(message(WATCH_ID, "hello there"))
+        self.assertEqual(len(self.rest.sent), 1)
+        self.assertIn(str(WATCH_ID), self.rest.sent[0]["content"])
+
+    def test_watch_ignores_dyllan_now(self):
+        self.engine.arm_watch(True)
+        self.engine.on_message(message(DYLLAN_ID, "hello there"))
+        self.assertEqual(self.rest.sent, [])
+
+    def test_punish_still_targets_dyllan_not_the_watch_target(self):
+        self.engine.on_message(message(LYNX_ID, f"<@{BOT_ID}> punish dyllan"))
+        self.assertEqual(self.rest.timeouts[0][0], DYLLAN_ID)
+        self.assertNotEqual(self.rest.timeouts[0][0], WATCH_ID)
+
+    def test_the_command_is_named_watchtarget(self):
+        self.assertIsNotNone(self.engine.registry.resolve("watchtarget"))
+
+    def test_the_old_dyllan_name_still_works(self):
+        self.assertIsNotNone(self.engine.registry.resolve("dyllan"))
 
 
 if __name__ == "__main__":
