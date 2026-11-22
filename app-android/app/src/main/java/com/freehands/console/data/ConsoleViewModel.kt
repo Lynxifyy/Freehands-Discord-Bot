@@ -36,6 +36,7 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _state = MutableStateFlow(UiState(configured = api.baseUrl.isNotBlank()))
     val state: StateFlow<UiState> = _state.asStateFlow()
+    private var polling = false
 
     init {
         if (_state.value.configured) {
@@ -61,6 +62,9 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun poll() {
+        // Guarded: two loops would double the request rate against the bot.
+        if (polling) return
+        polling = true
         viewModelScope.launch {
             while (true) {
                 try {
