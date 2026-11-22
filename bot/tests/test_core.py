@@ -43,6 +43,36 @@ class CodeSenseTests(unittest.TestCase):
         for probe in ("8", "i have 8 apples", "the 8 ball", "channel 10"):
             self.assertIsNone(self.book.sense(probe), probe)
 
+    def test_obfuscated_spellings_are_still_sensed(self):
+        """People type in a hurry, and a spy may try to dodge the filter."""
+        for probe in ("c0de 8", "cod3 8", "c0d3 8", "kode 8",
+                      "c o d e 8", "c.o.d.e 10", "c0de 10"):
+            hit = self.book.sense(probe)
+            self.assertIsNotNone(hit, probe)
+            self.assertIn(hit.code.number, (8, 10), probe)
+
+    def test_leet_folding_does_not_corrupt_the_number(self):
+        """`code 10` must not become `code io` when digits are folded."""
+        self.assertEqual(self.book.sense("c0de 10").code.number, 10)
+
+    def test_words_that_merely_contain_code_stay_quiet(self):
+        for probe in ("decode 8 bytes", "barcode 8", "enc0de 8 bytes",
+                      "this code 8s broken", "the code is fine"):
+            self.assertIsNone(self.book.sense(probe), probe)
+
+    def test_sensing_a_quiet_message_is_cheap(self):
+        """Every message is scanned, so the no-hit path must stay fast.
+
+        The old implementation compiled 48 alias regexes per message; a budget
+        of 60 us catches a return to that without being flaky on slow CI.
+        """
+        import timeit
+        seconds = timeit.timeit(
+            lambda: self.book.sense("ordinary chatter about nothing at all"),
+            number=2000,
+        )
+        self.assertLess(seconds / 2000 * 1e6, 60.0)
+
     def test_phrase_alias(self):
         hit = self.book.sense("guys i think there's a spy")
         self.assertIsNotNone(hit)

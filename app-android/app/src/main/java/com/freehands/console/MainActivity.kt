@@ -1,5 +1,7 @@
 package com.freehands.console
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -16,7 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -35,14 +39,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.freehands.console.data.ConsoleViewModel
+import com.freehands.console.data.UpdateInfo
 import com.freehands.console.ui.Brand
 import com.freehands.console.ui.CommandsTab
 import com.freehands.console.ui.Danger
@@ -63,6 +70,52 @@ private val scheme = darkColorScheme(
     onSurface = Color.White,
 )
 
+@Composable
+private fun UpdateDialog(
+    latest: UpdateInfo,
+    onInstall: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Panel,
+        title = {
+            Text(
+                "Update available",
+                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp,
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    "Version ${latest.version} is ready. You are on ${BuildConfig.VERSION_NAME}.",
+                    color = Color.White, fontSize = 13.sp,
+                )
+                if (latest.notes.isNotBlank()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        latest.notes.trim().take(400),
+                        color = Muted, fontSize = 11.sp,
+                        maxLines = 8,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onInstall,
+                colors = ButtonDefaults.buttonColors(containerColor = Brand),
+            ) { Text("Download", color = Color.White, fontSize = 13.sp) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Later", color = Muted, fontSize = 13.sp)
+            }
+        },
+    )
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +133,23 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun App(vm: ConsoleViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Shown above both screens: an update matters even before pairing.
+    state.update?.let { latest ->
+        if (!state.updateDismissed) {
+            UpdateDialog(
+                latest = latest,
+                onInstall = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(latest.url)))
+                    }
+                    vm.dismissUpdate()
+                },
+                onDismiss = vm::dismissUpdate,
+            )
+        }
+    }
 
     if (!state.configured) {
         PairScreen(
@@ -143,6 +213,10 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                         busy = state.busy,
                         counts = state.counts,
                         onTogglePower = vm::togglePower,
+                        onTest = vm::runTest,
+                        testing = state.testing,
+                        test = state.test,
+                        onDismissTest = vm::clearTest,
                     )
                     1 -> CommandsTab(commands = state.commands)
                     else -> SettingsTab(

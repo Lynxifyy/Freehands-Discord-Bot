@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,11 +19,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,15 +34,84 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
+import android.os.Build
 import com.freehands.console.data.LogRow
+import com.freehands.console.data.SelfTest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private val clock = SimpleDateFormat("HH:mm:ss", Locale.US)
+
+@Composable
+private fun TestCard(result: SelfTest, onDismiss: () -> Unit) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = PanelAlt),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (result.ok) "Self-test passed" else "${result.passed}/${result.total} passed",
+                    color = if (result.ok) Good else Danger,
+                    fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) {
+                    Text("close", color = Muted, fontSize = 11.sp)
+                }
+            }
+            result.checks.forEach { c ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Text(
+                        if (c.ok) "OK" else "FAIL",
+                        color = if (c.ok) Good else Danger,
+                        fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(38.dp),
+                    )
+                    Text(c.name, color = Color.White, fontSize = 11.sp,
+                        modifier = Modifier.width(78.dp))
+                    Text(c.detail, color = Muted, fontSize = 10.sp,
+                        modifier = Modifier.weight(1f), maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * One loader for the whole feed, with animated-image support.
+ *
+ * Coil only animates GIF/WebP when a decoder is registered. Building the loader
+ * once (not per row) also keeps the bitmap cache shared across the list.
+ */
+@Composable
+private fun rememberImageLoader(): ImageLoader {
+    val context = LocalContext.current
+    return remember(context) {
+        ImageLoader.Builder(context)
+            .components {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    add(ImageDecoderDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+            }
+            .build()
+    }
+}
 
 @Composable
 fun LogTab(
@@ -48,6 +121,10 @@ fun LogTab(
     busy: Boolean,
     counts: Map<String, Int>,
     onTogglePower: () -> Unit,
+    onTest: () -> Unit = {},
+    testing: Boolean = false,
+    test: SelfTest? = null,
+    onDismissTest: () -> Unit = {},
 ) {
     val uri = LocalUriHandler.current
     Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
@@ -95,7 +172,27 @@ fun LogTab(
                         )
                     }
                 }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(
+                    onClick = onTest,
+                    enabled = running && !testing,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    if (testing) {
+                        CircularProgressIndicator(
+                            Modifier.size(14.dp), color = Brand, strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Test", color = Brand, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
+        }
+
+        test?.let { result ->
+            Spacer(Modifier.height(12.dp))
+            TestCard(result, onDismissTest)
         }
 
         Spacer(Modifier.height(14.dp))
@@ -202,11 +299,15 @@ private fun MediaChip(kind: String, url: String, name: String, onOpen: () -> Uni
             .padding(7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (kind == "image" || kind == "gif" || kind == "sticker") {
+        // Everything Discord sends as a picture, including custom emoji.
+        // Stickers and emoji are small, so they get a smaller tile than a photo.
+        if (kind in setOf("image", "gif", "sticker", "emoji")) {
+            val side = if (kind == "emoji") 30.dp else 44.dp
             AsyncImage(
-                model = url,
+                model = ImageRequest.Builder(LocalContext.current).data(url).build(),
+                imageLoader = rememberImageLoader(),
                 contentDescription = kind,
-                modifier = Modifier.size(44.dp).clip(RoundedCornerShape(7.dp)),
+                modifier = Modifier.size(side).clip(RoundedCornerShape(7.dp)),
             )
             Spacer(Modifier.width(9.dp))
         }

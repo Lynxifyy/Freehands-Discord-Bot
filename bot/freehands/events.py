@@ -12,6 +12,7 @@ disk with chat history.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections import deque
@@ -22,11 +23,37 @@ MAX_RECORDS = 2000
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
 
+# Discord sends stickers as `sticker_items`; format_type says how to fetch it.
+# 1=PNG, 2=APNG, 3=Lottie (JSON, not an image), 4=GIF.
+_STICKER_EXT = {1: "png", 2: "apng", 3: "json", 4: "gif"}
+
+# <:name:id> for static, <a:name:id> for animated custom emoji.
+_EMOJI_RE = re.compile(r"<(a?):([A-Za-z0-9_~]+):(\d{5,})>")
+
+
+def _emoji(text: str) -> list[dict[str, str]]:
+    """Pull custom emoji out of message text so they render as pictures.
+
+    Unicode emoji need nothing: the console font already draws them. Custom
+    emoji are images referenced by id, and the raw `<:name:id>` markup is
+    unreadable, so they become media entries instead.
+    """
+    out: list[dict[str, str]] = []
+    for animated, name, eid in _EMOJI_RE.findall(text or ""):
+        out.append({
+            "kind": "emoji",
+            "url": f"https://cdn.discordapp.com/emojis/{eid}.{'gif' if animated else 'png'}",
+            "name": f":{name}:",
+            "size": "",
+        })
+    return out
+
+
 def _media(msg: dict[str, Any]) -> list[dict[str, str]]:
     """Flatten every kind of attachment into one list of links.
 
-    Discord splits media across three fields: `attachments` for uploads,
-    `stickers` for stickers and `embeds` for link previews and GIFs. The
+    Discord splits media across several fields: `attachments` for uploads,
+    `sticker_items` for stickers and `embeds` for link previews and GIFs. The
     console wants one list, so each entry carries its own kind and URL.
     """
     out: list[dict[str, str]] = []
@@ -45,10 +72,13 @@ def _media(msg: dict[str, Any]) -> list[dict[str, str]]:
             "name": a.get("filename") or "",
             "size": str(a.get("size") or ""),
         })
-    for s in msg.get("stickers") or []:
+    # `sticker_items` is what the API actually sends; `stickers` is the older
+    # shape and is only read as a fallback.
+    for s in (msg.get("sticker_items") or msg.get("stickers") or []):
+        ext = _STICKER_EXT.get(s.get("format_type") or 1, "png")
         out.append({
             "kind": "sticker",
-            "url": f"https://cdn.discordapp.com/stickers/{s.get('id')}.png",
+            "url": f"https://cdn.discordapp.com/stickers/{s.get('id')}.{ext}",
             "name": s.get("name") or "",
             "size": "",
         })
@@ -59,7 +89,10 @@ def _media(msg: dict[str, Any]) -> list[dict[str, str]]:
         video = ((e.get("video") or {}).get("url")) or ""
         image = ((e.get("image") or {}).get("url")) or ""
         kind = "gif" if etype == "gifv" else "embed"
-        link = video or image or thumb or url
+        # A gifv's `video` is an mp4, which an image loader cannot draw. The
+        # thumbnail is the animated still, so prefer it for display and only
+        # fall back to the video when there is nothing else.
+        link = image or thumb or video or url
         if link:
             out.append({"kind": kind, "url": link, "name": e.get("title") or "", "size": ""})
     return out
@@ -145,12 +178,13 @@ class EventLog:
     def message(self, msg: dict[str, Any], content: str = "") -> dict[str, Any]:
         # The gateway may blank `content` without the message-content intent, so
         # the caller passes a hydrated copy; fall back to the raw field.
+        text = content or (msg.get("content") or "")
         return self._append({
             "type": "message",
             "channel": str(msg.get("channel_id") or ""),
             "author": _author(msg),
-            "text": content or (msg.get("content") or ""),
-            "media": _media(msg),
+            "text": text,
+            "media": _media(msg) + _emoji(text),
             "reply_to": str((msg.get("referenced_message") or {}).get("id") or ""),
             "message_id": str(msg.get("id") or ""),
         })
@@ -168,13 +202,14 @@ class EventLog:
         })
 
     def edited(self, data: dict[str, Any], old: str = "") -> dict[str, Any]:
+        text = data.get("content") or ""
         return self._append({
             "type": "edit",
             "channel": str(data.get("channel_id") or ""),
             "author": _author(data),
-            "text": data.get("content") or "",
+            "text": text,
             "before": old,
-            "media": _media(data),
+            "media": _media(data) + _emoji(text),
         })
 
     def presence(self, data: dict[str, Any]) -> dict[str, Any]:

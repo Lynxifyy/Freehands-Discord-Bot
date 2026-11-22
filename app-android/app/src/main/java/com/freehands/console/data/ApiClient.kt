@@ -42,6 +42,23 @@ data class BotStatus(
     val counts: Map<String, Int>,
 )
 
+data class UpdateInfo(
+    val known: Boolean,
+    val version: String,
+    val url: String,
+    val notes: String,
+)
+
+data class SelfTest(
+    val passed: Int,
+    val total: Int,
+    val checks: List<SelfTestCheck>,
+) {
+    val ok: Boolean get() = total > 0 && passed == total
+}
+
+data class SelfTestCheck(val name: String, val ok: Boolean, val detail: String)
+
 data class Creator(
     val login: String,
     val name: String,
@@ -82,6 +99,30 @@ class ApiClient(var baseUrl: String, var token: String) {
         val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
         if (code !in 200..299) throw IOException("HTTP $code: ${text.take(200)}")
         return text
+    }
+
+    /**
+     * The newest published release. Public, so it works before pairing.
+     *
+     * A failure here is not an error worth showing: the phone may be offline,
+     * or GitHub may be rate-limiting. The caller treats "unknown" as "say
+     * nothing" rather than nagging about a check that never happened.
+     */
+    suspend fun latestVersion(): UpdateInfo? = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = URL(baseUrl.trimEnd('/') + "/api/version")
+            val c = url.openConnection() as HttpURLConnection
+            c.connectTimeout = 5000
+            c.readTimeout = 8000
+            val text = c.inputStream.bufferedReader().use { it.readText() }
+            val o = JSONObject(text)
+            UpdateInfo(
+                known = o.optBoolean("known", false),
+                version = o.optString("version"),
+                url = o.optString("url"),
+                notes = o.optString("notes"),
+            )
+        }.getOrNull()
     }
 
     suspend fun status(): BotStatus = withContext(Dispatchers.IO) {
@@ -128,6 +169,23 @@ class ApiClient(var baseUrl: String, var token: String) {
                 messageId = r.optString("message_id"),
             )
         }
+    }
+
+    suspend fun selfTest(): SelfTest = withContext(Dispatchers.IO) {
+        val o = JSONObject(read(conn("/api/selftest", "GET", null)))
+        val arr = o.optJSONArray("checks") ?: JSONArray()
+        SelfTest(
+            passed = o.optInt("passed"),
+            total = o.optInt("total"),
+            checks = (0 until arr.length()).map { i ->
+                val c = arr.getJSONObject(i)
+                SelfTestCheck(
+                    name = c.optString("name"),
+                    ok = c.optBoolean("ok"),
+                    detail = c.optString("detail"),
+                )
+            },
+        )
     }
 
     suspend fun commands(): List<CommandInfo> = withContext(Dispatchers.IO) {

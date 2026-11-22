@@ -18,6 +18,8 @@ strict attempt limit so the code space cannot be walked.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import signal
@@ -31,10 +33,55 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+REPO = "Lynxifyy/Freehands-Discord-Bot"
 BOT_DIR = ROOT / "bot"
 PIDFILE = BOT_DIR / "freehands.pid"
+STATE = BOT_DIR / "state.json"
 BOT_API = "http://127.0.0.1:8791"
 DEFAULT_PORT = 8790
+
+
+_VERSION_CACHE: dict[str, Any] = {"at": 0.0, "payload": None}
+VERSION_TTL = 3600.0   # GitHub's unauthenticated limit is 60 requests/hour
+
+
+def _latest_release() -> dict[str, Any]:
+    """Ask GitHub for the newest release, cached for an hour.
+
+    Unauthenticated on purpose: the app has no token before pairing, and a
+    version check must work even then. The result is cached because GitHub
+    allows only 60 anonymous calls an hour per address.
+    """
+    now = time.time()
+    if _VERSION_CACHE["payload"] and now - _VERSION_CACHE["at"] < VERSION_TTL:
+        return _VERSION_CACHE["payload"]
+
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "freehands-console"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read() or b"{}")
+    except (urllib.error.URLError, OSError, ValueError):
+        # A failed lookup must not look like "up to date", but it also must not
+        # break the app: report unknown and let the client decide to stay quiet.
+        return {"known": False}
+
+    tag = str(data.get("tag_name") or "").lstrip("v")
+    asset = next(
+        (a for a in data.get("assets") or [] if str(a.get("name", "")).endswith(".apk")),
+        None,
+    )
+    payload = {
+        "known": bool(tag),
+        "version": tag,
+        "url": (asset or {}).get("browser_download_url") or data.get("html_url") or "",
+        "notes": (data.get("body") or "")[:600],
+        "published": data.get("published_at") or "",
+    }
+    _VERSION_CACHE.update({"at": now, "payload": payload})
+    return payload
 
 
 def _token() -> str:
@@ -94,6 +141,7 @@ def _alive() -> bool:
 
 
 def _start() -> dict[str, Any]:
+    _reap()
     if _alive():
         return {"ok": True, "already": True, "pid": _read_pid()}
     BOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -127,7 +175,26 @@ def _stop() -> dict[str, Any]:
         PIDFILE.unlink()
     except OSError:
         pass
+    _reap()
     return {"ok": True, "stopped": pid}
+
+
+def _reap() -> None:
+    """Collect exited children.
+
+    The supervisor is the parent of every bot it starts. Without a wait the
+    dead child stays a zombie, which leaks a process slot on a long-lived host
+    and leaves an empty /proc entry that makes `_is_bot` read as "not running".
+    """
+    try:
+        while True:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+    except ChildProcessError:
+        pass
+    except OSError:
+        pass
 
 
 def _restart() -> dict[str, Any]:
@@ -183,24 +250,44 @@ def _device_cached(token: str) -> dict[str, Any] | None:
     return device
 
 
-def _device_for(token: str) -> dict[str, Any] | None:
-    """Ask the bot whether a paired-device token is valid.
+def _state_devices() -> list[dict[str, Any]]:
+    """Read the device rows the bot persists, without needing the bot alive."""
+    try:
+        payload = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = payload.get("devices")
+    return rows if isinstance(rows, list) else []
 
-    The registry lives in the bot process, so this is a loopback call rather
-    than shared state. Returns the device row when valid.
+
+def _device_for(token: str) -> dict[str, Any] | None:
+    """Check a paired-device token against the persisted device registry.
+
+    This deliberately reads `state.json` instead of asking the bot over
+    loopback. Auth must not depend on the bot process, because the supervisor's
+    job includes *starting* it: when the bot was down, every token failed and
+    the app could not press Start. The file is the same source of truth, only
+    hashes are stored, and `Pairing._save()` writes it with `force=True` before
+    the token is ever handed out, so a freshly paired phone is valid at once.
+
+    Returns the device row when the token matches.
     """
     if not token:
         return None
-    req = urllib.request.Request(
-        f"{BOT_API}/api/devices",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=4) as r:
-            payload = json.loads(r.read() or b"{}")
-    except (urllib.error.URLError, OSError, ValueError):
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    match = None
+    for row in _state_devices():
+        stored = str(row.get("token_hash") or "")
+        # Compare every row so timing does not reveal a near match.
+        if stored and hmac.compare_digest(stored, digest):
+            match = row
+    if match is None:
         return None
-    return payload.get("device")
+    return {
+        "id": match.get("id"),
+        "name": match.get("name"),
+        "created": match.get("created"),
+    }
 
 
 # Indirection so tests can replace the lookup without touching the network.
@@ -263,6 +350,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/health":
             return self._send(200, {"ok": True})
+        if path == "/api/version":
+            # Public: the app checks for updates before it is paired.
+            return self._send(200, _latest_release())
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
         if path == "/api/power":
@@ -271,7 +361,8 @@ class Handler(BaseHTTPRequestHandler):
                 "device": getattr(self, "device", None),
             })
         query = ("?" + self.path.split("?", 1)[1]) if "?" in self.path else ""
-        if path in ("/api/status", "/api/log", "/api/commands", "/api/settings"):
+        if path in ("/api/status", "/api/log", "/api/commands", "/api/settings",
+                    "/api/selftest"):
             status, payload = _proxy(path + query)
             return self._send(status, payload)
         return self._send(404, {"error": "not found"})
