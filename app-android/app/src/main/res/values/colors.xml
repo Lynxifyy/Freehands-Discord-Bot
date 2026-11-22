@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="brand">#5865F2</color>
+    <!-- Matches `Ink` in Theme.kt: the window background while Compose starts,
+         so the cold start is the same black as the app instead of white. -->
+    <color name="freehands_ink">#080A0F</color>
 </resources>

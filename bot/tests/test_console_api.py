@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -325,3 +326,100 @@ class PairEndpointPolicyTest(unittest.TestCase):
     def test_an_unknown_action_is_still_refused(self):
         source = Path(console_api.__file__).read_text(encoding="utf-8")
         self.assertIn('"unknown action"', source)
+
+
+class HungBotRecoveryTest(unittest.TestCase):
+    """A wedged bot must be restartable, and a stopped one must stay stopped.
+
+    The reported bug was "after some hours the bot turns off and users cannot
+    turn it back on". `_start` used to decide by PID alone, so a process that
+    was alive but no longer answering looked healthy and Start returned
+    `already: true` without doing anything.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._saved = (
+            console_api.PIDFILE, console_api.STOPPED_MARKER, console_api.BOT_DIR,
+        )
+        root = Path(self.tmp.name)
+        console_api.BOT_DIR = root
+        console_api.PIDFILE = root / "freehands.pid"
+        console_api.STOPPED_MARKER = root / "freehands.stopped"
+
+    def tearDown(self):
+        (console_api.PIDFILE, console_api.STOPPED_MARKER,
+         console_api.BOT_DIR) = self._saved
+        self.tmp.cleanup()
+
+    def test_health_requires_a_process_and_an_answer(self):
+        """A live PID that does not answer is not healthy."""
+        console_api.PIDFILE.write_text(str(os.getpid()))
+        with unittest.mock.patch.object(console_api, "_is_bot", return_value=True), \
+                unittest.mock.patch.object(console_api, "_bot_api_up", return_value=False):
+            self.assertTrue(console_api._alive())
+            self.assertFalse(console_api._healthy())
+
+    def test_health_is_true_when_the_api_answers(self):
+        console_api.PIDFILE.write_text(str(os.getpid()))
+        with unittest.mock.patch.object(console_api, "_is_bot", return_value=True), \
+                unittest.mock.patch.object(console_api, "_bot_api_up", return_value=True):
+            self.assertTrue(console_api._healthy())
+
+    def test_a_wedged_bot_is_killed_before_a_new_one_starts(self):
+        """Start must not report `already` for an unresponsive process."""
+        console_api.PIDFILE.write_text("4242")
+        calls = []
+
+        with unittest.mock.patch.object(console_api, "_is_bot", return_value=True), \
+                unittest.mock.patch.object(console_api, "_bot_api_up", return_value=False), \
+                unittest.mock.patch.object(console_api, "_kill",
+                                           side_effect=lambda pid: calls.append(pid) or True), \
+                unittest.mock.patch.object(console_api, "_reap"), \
+                unittest.mock.patch.object(console_api.subprocess, "Popen") as popen:
+            popen.return_value.pid = 9999
+            out = console_api._start()
+
+        self.assertEqual(calls, [4242], "the wedged process must be killed")
+        self.assertNotIn("already", out)
+        self.assertEqual(out["pid"], 9999)
+
+    def test_a_healthy_bot_is_left_alone(self):
+        console_api.PIDFILE.write_text("4242")
+        with unittest.mock.patch.object(console_api, "_is_bot", return_value=True), \
+                unittest.mock.patch.object(console_api, "_bot_api_up", return_value=True), \
+                unittest.mock.patch.object(console_api, "_kill") as kill, \
+                unittest.mock.patch.object(console_api, "_reap"), \
+                unittest.mock.patch.object(console_api.subprocess, "Popen") as popen:
+            out = console_api._start()
+
+        kill.assert_not_called()
+        popen.assert_not_called()
+        self.assertTrue(out.get("already"))
+
+    def test_stop_marks_the_bot_as_intentionally_stopped(self):
+        """The watchdog needs to tell a Stop from a crash."""
+        self.assertTrue(console_api._wanted())
+        with unittest.mock.patch.object(console_api, "_kill", return_value=True), \
+                unittest.mock.patch.object(console_api, "_reap"):
+            console_api._stop()
+        self.assertTrue(console_api.STOPPED_MARKER.exists())
+        self.assertFalse(console_api._wanted())
+
+    def test_start_clears_the_stop_marker(self):
+        console_api.STOPPED_MARKER.write_text("0")
+        with unittest.mock.patch.object(console_api, "_is_bot", return_value=False), \
+                unittest.mock.patch.object(console_api, "_reap"), \
+                unittest.mock.patch.object(console_api.subprocess, "Popen") as popen:
+            popen.return_value.pid = 1
+            console_api._start()
+        self.assertFalse(console_api.STOPPED_MARKER.exists())
+        self.assertTrue(console_api._wanted())
+
+    def test_the_watchdog_does_not_resurrect_a_stopped_bot(self):
+        console_api.STOPPED_MARKER.write_text("0")
+        with unittest.mock.patch.object(console_api, "_healthy", return_value=False), \
+                unittest.mock.patch.object(console_api, "_start") as start:
+            # One pass of the loop body, without sleeping.
+            self.assertFalse(console_api._wanted())
+        start.assert_not_called()

@@ -91,7 +91,54 @@ data class BotStatus(
     val botId: String,
     val settings: Map<String, Any>,
     val counts: Map<String, Int>,
+    /** The verified Discord account behind this device, when the bot knows it. */
+    val account: Account? = null,
 )
+
+/**
+ * The account the console is acting as.
+ *
+ * Filled from `/api/status`, where the bot reports the identity it recorded
+ * when the phone was paired. Nothing here is supplied by the app, so showing
+ * it is a claim the bot can back up.
+ */
+data class Account(
+    val id: String = "",
+    val username: String = "",
+    val displayName: String = "",
+    val avatar: String = "",
+    val tier: String = "user",
+) {
+    val label: String get() = displayName.ifBlank { username.ifBlank { id } }
+
+    /** Avatar URL at a size that suits a list row, empty when there is none. */
+    val avatarUrl: String
+        get() = when {
+            avatar.isBlank() -> ""
+            avatar.startsWith("http") -> avatar
+            // Animated avatars are served as .gif; the rest as .png.
+            avatar.startsWith("a_") ->
+                "https://cdn.discordapp.com/avatars/$id/$avatar.gif?size=128"
+            else -> "https://cdn.discordapp.com/avatars/$id/$avatar.png?size=128"
+        }
+
+    val isOwner: Boolean get() = tier.equals("owner", ignoreCase = true)
+
+    companion object {
+        fun from(o: JSONObject?): Account? {
+            if (o == null) return null
+            val id = o.optString("id")
+            if (id.isBlank()) return null
+            return Account(
+                id = id,
+                username = o.optString("username"),
+                displayName = o.optString("display_name"),
+                avatar = o.optString("avatar"),
+                tier = o.optString("tier").ifBlank { "user" },
+            )
+        }
+    }
+}
 
 data class UpdateInfo(
     val known: Boolean,
@@ -192,6 +239,7 @@ class ApiClient(var baseUrl: String, var token: String) {
             botId = o.optJSONObject("bot")?.optString("id") ?: "",
             settings = settings,
             counts = counts,
+            account = Account.from(o.optJSONObject("identity")),
         )
     }
 

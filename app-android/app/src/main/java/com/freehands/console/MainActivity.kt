@@ -3,9 +3,13 @@ package com.freehands.console
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +82,7 @@ import com.freehands.console.ui.Hairline
 import com.freehands.console.ui.SettingsTab
 import com.freehands.console.ui.SplashScreen
 import com.freehands.console.ui.StatusPill
+import com.freehands.console.ui.AccountScreen
 import com.freehands.console.ui.WebMenu
 
 private val scheme = darkColorScheme(
@@ -139,6 +144,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        goFullScreen()
         setContent {
             MaterialTheme(colorScheme = scheme) {
                 Box(Modifier.fillMaxSize().background(Ink)) {
@@ -153,6 +159,32 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Hides the status and navigation bars, and keeps them hidden.
+     *
+     * `enableEdgeToEdge` only lets the app draw *behind* the bars; it does not
+     * remove them, which is why the app still showed system buttons. Swiping
+     * also brings them back temporarily, so the hide is repeated on every
+     * window-focus gain — without that, leaving the app and coming back leaves
+     * the bars on screen for good.
+     */
+    private fun goFullScreen() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+        // Keeps the screen awake while the console is open: the log is meant to
+        // be watched, and a screen that sleeps mid-command looks like a freeze.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) goFullScreen()
     }
 }
 
@@ -177,10 +209,11 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
         }
     }
 
-    // The in-app browser. Opening it is what the pairing button does, and the
-    // same screen serves the account page from the settings menu, so a user
-    // never has to leave the app to finish either job.
+    // The in-app browser exists only to finish pairing, which has to happen
+    // inside the bot's own page. The account page used to reuse it and pointed
+    // at `/authorize`, which shows nothing on an already-paired device.
     var web by rememberSaveable { mutableStateOf<String?>(null) }
+    var accountOpen by rememberSaveable { mutableStateOf(false) }
 
     if (!state.configured) {
         if (web != null) {
@@ -203,17 +236,11 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
         return
     }
 
-    if (web != null) {
-        WebMenu(
-            url = web!!,
-            title = "Account",
-            onClose = { web = null },
-            onPaired = { _, _ -> web = null },
-            onNavigate = { target ->
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
-                }
-            },
+    if (accountOpen) {
+        AccountScreen(
+            account = state.account,
+            botName = state.botName,
+            onClose = { accountOpen = false },
         )
         return
     }
@@ -330,7 +357,7 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                             onOpenPowers = vm::loadPowers,
                             onSetPower = { k, on, c -> vm.setPower(k, on, c) },
                             identity = state.identity,
-                            onOpenAccount = { web = vm.accountUrl() },
+                            onOpenAccount = { accountOpen = true },
                         )
                     }
                 }

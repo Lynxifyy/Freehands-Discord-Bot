@@ -111,6 +111,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.2")
+    // WindowCompat / WindowInsetsControllerCompat: hides the system bars for
+    // full screen. activity-compose pulls core in transitively, but pinning it
+    // keeps the version explicit instead of whatever a dependency resolves to.
+    implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
@@ -119,4 +123,8 @@ dependencies {
     // so a GIF in the log would look like a still picture.
     implementation("io.coil-kt:coil-gif:2.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
+    // The android.jar stub throws on every org.json call, so parsing tests
+    // would pass vacuously. This is the real implementation used at runtime.
+    testImplementation("org.json:json:20240303")
 }

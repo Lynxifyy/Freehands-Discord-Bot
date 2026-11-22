@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 const val CREATOR_LOGIN = "Lynxifyy"
 const val REPO_URL = "https://github.com/Lynxifyy/Freehands-Discord-Bot"
@@ -20,6 +21,8 @@ data class UiState(
     val pairError: String? = null,
     /** Verified account this device is paired as, once the server confirms it. */
     val identity: String? = null,
+    /** Full record of that account, when the bot reports one. */
+    val account: Account? = null,
     val running: Boolean = false,
     val botName: String = "",
     val settings: Map<String, Any> = emptyMap(),
@@ -67,9 +70,38 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         prefs.getString("token", "") ?: "",
     )
 
-    private val _state = MutableStateFlow(UiState(configured = api.token.isNotBlank()))
+    private val cachedAccount = runCatching {
+        prefs.getString("account", null)?.let { Account.from(JSONObject(it)) }
+    }.getOrNull()
+
+    private val _state = MutableStateFlow(
+        UiState(
+            configured = api.token.isNotBlank(),
+            // Restored from disk so the account screen has something to show
+            // before the first status poll — and while the bot is down, when
+            // an empty screen would wrongly read as "signed out".
+            account = cachedAccount,
+            identity = cachedAccount?.label,
+        )
+    )
     val state: StateFlow<UiState> = _state.asStateFlow()
     private var polling = false
+
+    private fun cacheAccount(account: Account?) {
+        if (account == null) return
+        runCatching {
+            prefs.edit().putString(
+                "account",
+                JSONObject()
+                    .put("id", account.id)
+                    .put("username", account.username)
+                    .put("display_name", account.displayName)
+                    .put("avatar", account.avatar)
+                    .put("tier", account.tier)
+                    .toString(),
+            ).apply()
+        }
+    }
 
     init {
         checkForUpdate()
@@ -199,9 +231,6 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     /** The bot-served page that runs the whole pairing exchange. */
     fun authorizeUrl(): String = api.baseUrl.trimEnd('/') + "/authorize"
 
-    /** The account page, for the settings menu. */
-    fun accountUrl(): String = api.baseUrl.trimEnd('/') + "/authorize"
-
     /**
      * Takes a token the in-app browser obtained after approval.
      *
@@ -234,7 +263,9 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Forgets this device locally. The server-side device stays until +revoke. */
     fun forgetDevice() {
-        prefs.edit().remove("token").apply()
+        // The account goes too. Leaving it behind would keep showing a name
+        // this phone is no longer allowed to act as.
+        prefs.edit().remove("token").remove("account").apply()
         api.token = ""
         _state.value = UiState(configured = false)
     }
@@ -258,9 +289,12 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
                         val st = api.status()
                         val rows = api.log()
                         val cmds = if (_state.value.commands.isEmpty()) api.commands() else _state.value.commands
+                        st.account?.let { cacheAccount(it) }
                         _state.value = _state.value.copy(
                             running = true, botName = st.botName, settings = st.settings,
                             counts = st.counts, rows = rows, commands = cmds,
+                            account = st.account ?: _state.value.account,
+                            identity = st.account?.label ?: _state.value.identity,
                             error = null, live = true,
                         )
                     } else {

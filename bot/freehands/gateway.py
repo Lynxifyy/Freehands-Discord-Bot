@@ -108,7 +108,11 @@ class Gateway:
         status_line = header.split(b"\r\n", 1)[0].decode("latin-1")
         if "101" not in status_line:
             raise GatewayClosed(f"handshake rejected: {status_line}")
-        sock.settimeout(None)
+        # A finite timeout, not None. With no timeout a half-open connection
+        # (the usual cause of a bot that goes quiet after a few hours) blocks
+        # in recv() forever and nothing ever notices. It is widened once the
+        # heartbeat interval is known.
+        sock.settimeout(30)
         return sock
 
     @staticmethod
@@ -187,8 +191,17 @@ class Gateway:
             while not self._stop.is_set():
                 time.sleep(interval)
                 self._send_frame(sock, json.dumps({"op": OP_HEARTBEAT, "d": self.seq}))
-        except Exception:
-            return
+        except Exception as exc:
+            # This used to `return` silently. The reader below blocks on a
+            # socket with no timeout, so a send that failed here left the bot
+            # alive, holding a dead socket, receiving nothing — the "it stops
+            # working after a few hours" report. Close the socket so the
+            # reader wakes up and the reconnect path runs.
+            log.warning("heartbeat failed (%s); dropping the connection", exc)
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def _run(self) -> None:
         backoff = 1.0
@@ -201,6 +214,10 @@ class Gateway:
                 if hello.get("op") != OP_HELLO:
                     raise GatewayClosed("expected hello")
                 interval = hello["d"]["heartbeat_interval"] / 1000.0
+                # Discord sends a heartbeat ACK within one interval. Waiting
+                # three gives two missed beats of slack before we declare the
+                # connection dead, which is the usual guidance for websockets.
+                sock.settimeout(max(interval * 3.0, 15.0))
 
                 if self.session_id and self.seq is not None:
                     self._resume(sock)

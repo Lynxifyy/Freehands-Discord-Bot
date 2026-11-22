@@ -1,4 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Freehands" parent="android:Theme.Material.NoActionBar" />
+    <!--
+        Full screen from the very first frame. Hiding the bars only in
+        onCreate leaves the status bar visible for the whole cold start, which
+        reads as the app "not being full screen". These window attributes apply
+        before any Kotlin runs.
+
+        shortEdges lets the app draw into the notch area in portrait, where a
+        status bar would otherwise force a black band.
+    -->
+    <style name="Theme.Freehands" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowBackground">@color/freehands_ink</item>
+    </style>
 </resources>

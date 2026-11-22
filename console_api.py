@@ -25,6 +25,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -36,8 +37,14 @@ ROOT = Path(__file__).resolve().parent
 REPO = "Lynxifyy/Freehands-Discord-Bot"
 BOT_DIR = ROOT / "bot"
 PIDFILE = BOT_DIR / "freehands.pid"
+# Present only while the operator has deliberately stopped the bot, so the
+# watchdog can tell "stopped on purpose" from "crashed".
+STOPPED_MARKER = BOT_DIR / "freehands.stopped"
 STATE = BOT_DIR / "state.json"
 BOT_API = "http://127.0.0.1:8791"
+# Serialises start/stop so the watchdog and a button press cannot both spawn a
+# bot. A re-entrant lock: `_restart` holds it across a stop and a start.
+_LIFECYCLE = threading.RLock()
 DEFAULT_PORT = 8790
 
 
@@ -279,10 +286,48 @@ def _alive() -> bool:
     return _read_pid() is not None
 
 
+def _healthy() -> bool:
+    """True only when the bot process exists *and* answers its own API.
+
+    A bare PID check is not enough. The gateway reads its socket with no
+    timeout, so a half-open connection leaves the process alive but wedged:
+    `_alive()` still says yes, so pressing Start used to return
+    `already: true` and never restart anything. That is the "it turned off and
+    I cannot turn it back on" report. Asking the API is the only check that
+    reflects what the app can actually do.
+    """
+    return _alive() and _bot_api_up()
+
+
+def _wanted() -> bool:
+    """False after the operator pressed Stop, until they press Start.
+
+    The watchdog must not resurrect a bot that was stopped on purpose. The
+    pidfile cannot express that: Stop deletes it, which looks identical to a
+    crash.
+    """
+    return not STOPPED_MARKER.exists()
+
+
 def _start() -> dict[str, Any]:
     _reap()
-    if _alive():
+    with _LIFECYCLE:
+        return _start_locked()
+
+
+def _start_locked() -> dict[str, Any]:
+    try:
+        STOPPED_MARKER.unlink()
+    except OSError:
+        pass
+    if _healthy():
         return {"ok": True, "already": True, "pid": _read_pid()}
+    if _alive():
+        # Process is there but wedged. Kill it rather than starting a second
+        # one: two bots on the same token fight over the gateway session and
+        # the console port, which is worse than the hang.
+        print("restarting unresponsive bot")
+        _kill(_read_pid())
     BOT_DIR.mkdir(parents=True, exist_ok=True)
     log = (BOT_DIR / "freehands.log").open("a")
     proc = subprocess.Popen(
@@ -298,23 +343,51 @@ def _start() -> dict[str, Any]:
     return {"ok": True, "pid": proc.pid}
 
 
+def _kill(pid: int, timeout: float = 10.0) -> bool:
+    """Terminate `pid`, escalating to SIGKILL if it will not go.
+
+    A wedged bot often ignores SIGTERM: the signal is handled by the main
+    thread, which may itself be blocked. Without the escalation the supervisor
+    would sit there with a process it cannot remove and never start a new one.
+    """
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        except OSError:
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if _read_pid() != pid:
+                return True
+            time.sleep(0.2)
+    return _read_pid() != pid
+
+
 def _stop() -> dict[str, Any]:
+    with _LIFECYCLE:
+        return _stop_locked()
+
+
+def _stop_locked() -> dict[str, Any]:
     pid = _read_pid()
+    # Written before the kill so a watchdog that runs in between does not
+    # treat the shutdown as a crash and start the bot straight back up.
+    try:
+        STOPPED_MARKER.write_text(str(int(time.time())))
+    except OSError:
+        pass
     if pid is None:
         return {"ok": True, "already": True}
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError as exc:
-        return {"ok": False, "error": str(exc)}
-    for _ in range(40):
-        if _read_pid() is None:
-            break
-        time.sleep(0.25)
+    ok = _kill(pid)
     try:
         PIDFILE.unlink()
     except OSError:
         pass
     _reap()
+    if not ok:
+        return {"ok": False, "error": f"process {pid} did not exit"}
     return {"ok": True, "stopped": pid}
 
 
@@ -337,9 +410,43 @@ def _reap() -> None:
 
 
 def _restart() -> dict[str, Any]:
-    _stop()
-    time.sleep(1.0)
-    return _start()
+    with _LIFECYCLE:
+        _stop_locked()
+        time.sleep(1.0)
+        return _start_locked()
+
+
+def _watchdog(interval: float = 20.0, grace: float = 90.0) -> None:
+    """Keep the bot up without a human pressing Start.
+
+    Before this, a bot that crashed or wedged stayed down until someone
+    noticed and pressed the button — and pressing it did nothing, because
+    `_start` only checked for a live PID. The grace period covers a stop that
+    is still settling; `_wanted` covers a deliberate Stop from the app, which
+    must not be undone. Both stop a crash-loop from hammering Discord's login
+    endpoint.
+    """
+    down_since = 0.0
+    while True:
+        time.sleep(interval)
+        try:
+            if _healthy():
+                down_since = 0.0
+                continue
+            if not _wanted():
+                down_since = 0.0
+                continue
+            now = time.time()
+            if down_since == 0.0:
+                down_since = now
+                continue
+            if now - down_since < grace:
+                continue
+            print("watchdog: bot is not answering; restarting it")
+            _start()
+            down_since = 0.0
+        except Exception as exc:  # a watchdog must never take the supervisor down
+            print(f"watchdog error: {exc!r}")
 
 
 def _bot_api_up() -> bool:
@@ -529,6 +636,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/power":
             return self._send(200, {
                 "running": _alive(), "pid": _read_pid(),
+                # What the app should actually gate on. `running` is the
+                # process; `healthy` means it is answering, which is the
+                # difference between "up" and "working".
+                "healthy": _healthy(), "wanted": _wanted(),
                 "device": getattr(self, "device", None),
             })
         query = ("?" + self.path.split("?", 1)[1]) if "?" in self.path else ""
@@ -600,6 +711,7 @@ def main(serve: bool = True) -> int:
     # machine reaches a usable state with no manual step.
     started = _start()
     print(f"bot: {started}")
+    threading.Thread(target=_watchdog, name="watchdog", daemon=True).start()
 
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
