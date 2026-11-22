@@ -43,6 +43,13 @@ android {
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
+
+        // Baked in so the app needs no setup screen for an address. Override
+        // for a self-hosted deployment:
+        //   ./gradlew assembleRelease -PfreehandsBaseUrl=https://your-host
+        val baseUrl = (findProperty("freehandsBaseUrl") as String?)
+            ?: "https://work-1-jopjdcxrigxgbupp.prod-runtime.all-hands.dev"
+        buildConfigField("String", "BASE_URL", "\"$baseUrl\"")
     }
 
     signingConfigs {
@@ -62,6 +69,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

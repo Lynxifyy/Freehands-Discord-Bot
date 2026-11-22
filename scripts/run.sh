@@ -21,8 +21,17 @@ echo "$pid" >"$PIDFILE"
 sleep 2
 
 if kill -0 "$pid" 2>/dev/null; then
-  echo "started (pid $pid), logging to $LOG"
+  echo "bot started (pid $pid), logging to $LOG"
   tail -n 5 "$LOG"
+  # The supervisor is what the app talks to; without it a paired phone has
+  # nothing to reach. It starts the bot itself if that is ever not running.
+  SUPLOG="bot/console.log"
+  if ! pgrep -f "console_api.py" >/dev/null 2>&1; then
+    nohup python3 console_api.py >>"$SUPLOG" 2>&1 &
+    echo "console API started (pid $!), logging to $SUPLOG"
+  else
+    echo "console API already running"
+  fi
 else
   echo "failed to start; last lines:"
   tail -n 20 "$LOG"

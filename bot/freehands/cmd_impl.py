@@ -89,6 +89,21 @@ def register(engine) -> None:
 
     add(Spec("whois", _bind(engine, whois), "mod", "+whois <user>", "member summary"))
 
+    from . import pair_commands
+    add(Spec("pair", _bind(engine, pair_commands.pair), "owner", "+pair [code]",
+             "pair the console app",
+             detail="Run with no code to issue a pairing code for the app, then "
+                    "run +pair <code> with the code the app shows. The app then "
+                    "gets its own token, so nobody types a URL or a secret."))
+    add(Spec("devices", _bind(engine, pair_commands.devices), "owner", "+devices",
+             "list paired consoles",
+             detail="Every phone that can control the bot, when it was paired and "
+                    "when it was last used."))
+    add(Spec("revoke", _bind(engine, pair_commands.revoke), "owner",
+             "+revoke <id|all>", "disconnect a console",
+             detail="Cut off one paired phone, or all of them. Use this if a "
+                    "device is lost or a token leaks."))
+
 
 def _flag(value: str) -> bool | None:
     lowered = value.strip().lower()

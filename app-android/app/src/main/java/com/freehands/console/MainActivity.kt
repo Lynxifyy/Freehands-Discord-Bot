@@ -82,7 +82,11 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
 
     if (!state.configured) {
-        SetupScreen { base, token -> vm.configure(base, token) }
+        PairScreen(
+            pairing = state.pairing,
+            error = state.pairError,
+            onPair = vm::pair,
+        )
         return
     }
 
@@ -182,9 +186,8 @@ private fun Header(running: Boolean, live: Boolean, botName: String, error: Stri
 }
 
 @Composable
-private fun SetupScreen(onSave: (String, String) -> Unit) {
-    var base by remember { mutableStateOf("http://") }
-    var token by remember { mutableStateOf("") }
+private fun PairScreen(pairing: Boolean, error: String?, onPair: (String) -> Unit) {
+    var code by remember { mutableStateOf("") }
 
     Column(
         Modifier
@@ -198,31 +201,34 @@ private fun SetupScreen(onSave: (String, String) -> Unit) {
             fontWeight = FontWeight.Bold, letterSpacing = 3.sp,
         )
         Text("Operator console", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(32.dp))
 
-        Text("CONTROL API URL", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp)
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = base,
-            onValueChange = { base = it },
-            singleLine = true,
-            placeholder = { Text("https://your-host/", color = Muted, fontSize = 12.sp) },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = Brand, unfocusedBorderColor = PanelAlt,
-                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-            ),
+        Text("PAIR THIS PHONE", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "In Discord, run +pair to get a code. Then type it here.",
+            color = Color.White, fontSize = 13.sp, lineHeight = 19.sp,
         )
-
         Spacer(Modifier.height(16.dp))
-        Text("CONSOLE TOKEN", color = Muted, fontSize = 10.sp, letterSpacing = 1.2.sp)
-        Spacer(Modifier.height(6.dp))
+
         OutlinedTextField(
-            value = token,
-            onValueChange = { token = it },
+            value = code,
+            onValueChange = { raw ->
+                // Accept a pasted code with spaces or dashes; the server
+                // normalises too, this just keeps the field tidy.
+                code = raw.filter { it.isLetterOrDigit() }.uppercase().take(6)
+            },
             singleLine = true,
-            placeholder = { Text("FH_CONSOLE_TOKEN", color = Muted, fontSize = 12.sp) },
+            isError = error != null,
+            placeholder = { Text("ABC123", color = Muted, fontSize = 18.sp) },
+            textStyle = androidx.compose.ui.text.TextStyle(
+                color = Color.White,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 6.sp,
+                fontFamily = FontFamily.Monospace,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            ),
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = OutlinedTextFieldDefaults.colors(
@@ -231,20 +237,29 @@ private fun SetupScreen(onSave: (String, String) -> Unit) {
             ),
         )
 
-        Spacer(Modifier.height(22.dp))
+        if (error != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(error, color = Danger, fontSize = 11.sp, lineHeight = 16.sp)
+        }
+
+        Spacer(Modifier.height(18.dp))
         Button(
-            onClick = { onSave(base, token) },
-            enabled = base.isNotBlank() && token.isNotBlank(),
+            onClick = { onPair(code) },
+            enabled = code.length == 6 && !pairing,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = Brand),
         ) {
-            Text("Connect", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(
+                if (pairing) "Pairing..." else "Pair",
+                color = Color.White, fontWeight = FontWeight.Bold,
+            )
         }
-        Spacer(Modifier.height(10.dp))
+
+        Spacer(Modifier.height(14.dp))
         Text(
-            "The token is stored on this device only. The bot itself is never " +
-                "exposed to the network; this app talks to the control API.",
+            "This phone gets its own access token. Nothing else needs typing, " +
+                "and you can cut it off later with +revoke in Discord.",
             color = Muted, fontSize = 10.sp, lineHeight = 15.sp,
         )
     }

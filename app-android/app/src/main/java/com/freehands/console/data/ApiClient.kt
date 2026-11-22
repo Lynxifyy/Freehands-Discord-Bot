@@ -1,5 +1,6 @@
 package com.freehands.console.data
 
+import com.freehands.console.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -47,6 +48,16 @@ data class Creator(
     val avatarUrl: String,
     val bio: String,
 )
+
+/**
+ * The console address ships with the app, so nobody has to type one.
+ *
+ * This is the operator host. Override at build time with
+ * `-PfreehandsBaseUrl=https://...` for a self-hosted deployment.
+ */
+object Endpoint {
+    val DEFAULT_BASE: String = BuildConfig.BASE_URL
+}
 
 class ApiClient(var baseUrl: String, var token: String) {
 
@@ -134,6 +145,29 @@ class ApiClient(var baseUrl: String, var token: String) {
                 aliases = (0 until al.length()).map { al.getString(it) },
             )
         }
+    }
+
+    /**
+     * Trades a six-character code from Discord for a device token.
+     *
+     * This is the only unauthenticated call: the code is the credential, and
+     * it can only have come from an operator running `+pair` in the server.
+     */
+    suspend fun pair(code: String, deviceName: String): String = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("action", "claim")
+            .put("code", code)
+            .put("name", deviceName)
+            .toString()
+        val c = URL(baseUrl.trimEnd('/') + "/api/pair").openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 8000
+        c.readTimeout = 12000
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(body.toByteArray()) }
+        val o = JSONObject(read(c))
+        o.optString("token").ifBlank { throw IOException("pairing returned no token") }
     }
 
     suspend fun power(action: String): Boolean = withContext(Dispatchers.IO) {

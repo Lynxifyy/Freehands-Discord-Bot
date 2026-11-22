@@ -18,12 +18,44 @@ with a link to the repository.
 
 ```
 phone  ──HTTPS──▶  console_api.py  ──loopback──▶  bot process
-        (token)     port 8790                      port 8791
+      (device      public port                    port 8791
+       token)
 ```
 
 The bot listens only on `127.0.0.1`. `console_api.py` is the one public door, and
 it requires a bearer token on every request. That way the bot token never leaves
 the server.
+
+## Connecting: no setup screen
+
+The app ships with the console address already set, so there is no URL field.
+Access is granted by **pairing**, which happens in Discord:
+
+1. Open the app. It shows a pairing screen asking for a code.
+2. In Discord, run `+pair`. The bot replies with a six-character code.
+3. Type that code into the app and tap **Pair**.
+
+The phone receives its own access token and is remembered from then on. Nothing
+secret is ever copied from a terminal into the phone.
+
+`+devices` lists every paired phone and when it last checked in. `+revoke <id>`
+cuts one off; `+revoke all` cuts off every device.
+
+Why it works this way: a token typed by a human ends up in screenshots, chat
+logs and shell history. A code that lives for five minutes and is single-use
+does not. Each device also gets its own token, so one phone being lost does not
+require re-pairing every other phone.
+
+The server stores only a SHA-256 hash of each token, so a leaked `state.json`
+does not leak a working credential.
+
+### Self-hosting
+
+Point the app at your own host at build time:
+
+```bash
+./gradlew :app:assembleRelease -PfreehandsBaseUrl=https://your-host
+```
 
 ## Build
 
@@ -41,13 +73,17 @@ Needs JDK 17 or newer, Android SDK 35, and Gradle 8.9.
 
 1. Start the supervisor on the machine that runs the bot:
    ```bash
-   FH_CONSOLE_TOKEN='choose-a-long-secret' python3 console_api.py
+   python3 console_api.py
    ```
-2. Open the app. Enter the URL and the same token.
+   It starts the bot itself, so this is the only command needed.
+2. Open the app, run `+pair` in Discord, and enter the code.
 3. Tap **Start**.
 
-The token is kept on the phone in private storage. Nothing is sent anywhere
-except your own control API.
+The device token is kept on the phone in private storage. Nothing is sent
+anywhere except your own control API.
+
+`FH_CONSOLE_TOKEN` is still honoured if you set it. It is useful for scripts and
+for regaining access if every phone is lost; it is no longer required.
 
 ## Honest limits
 

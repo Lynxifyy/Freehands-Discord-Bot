@@ -64,6 +64,10 @@ class Engine:
         self.ops = OpsChannel(rest, store)
         self.rooms: dict[int, AlertRoom] = {}
         self.tempown = TempOwnership(rest, store)
+        # Console device pairing. Codes are in-memory; devices persist so a
+        # restart does not log every phone out.
+        from .pairing import Pairing
+        self.pairing = Pairing(store)
         # The console feed. Bounded in memory and mirrored to a capped file so a
         # long-running bot cannot fill the disk with chat history.
         self.events = EventLog(store.path.parent / "events.jsonl")

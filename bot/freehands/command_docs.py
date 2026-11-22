@@ -77,6 +77,16 @@ DETAILS: dict[str, str] = {
              "Only messages the bot can remove are affected.",
     "strikes": "Shows how many strikes a member has and what each one was for.",
     "unmute": "Clears a timeout early so the member can speak again.",
+    "pair": "Connects the phone app without typing a URL or a token. Run +pair "
+            "with no code and the bot gives you a six-character code; the app "
+            "shows the same code, and you run +pair <code> with it. The phone "
+            "then gets a token of its own, shown once.",
+    "devices": "Lists every phone that can control the bot, when it was paired "
+               "and when it last checked in. Use it to spot a device you do not "
+               "recognise.",
+    "revoke": "Disconnects a paired phone. Use +revoke <id> for one device or "
+              "+revoke all for every device. Do this if a phone is lost or you "
+              "think a token leaked.",
     "whois": "Shows a short summary of a member: their name, when they joined, "
              "their roles and their strike count.",
     # -- everyone ---------------------------------------------------------

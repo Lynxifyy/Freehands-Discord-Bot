@@ -5,8 +5,15 @@ lifecycle (start, stop, restart) and forwards reads and setting changes to the
 bot's loopback API, so the process holding the Discord token is never directly
 reachable from the network.
 
-Auth is a bearer token. Without `FH_CONSOLE_TOKEN` set the server refuses to
-start rather than expose an unauthenticated remote control for a Discord bot.
+Auth is a bearer token. Two kinds are accepted:
+
+* a **paired device token** from `/api/pair`, which is how the app gets access
+  without anyone typing a secret, and
+* `FH_CONSOLE_TOKEN`, kept for scripts and for recovering a lost pairing.
+
+Pairing itself cannot require a token, or nobody could ever get one. It is
+instead gated by a six-character code that only appears inside Discord, plus a
+strict attempt limit so the code space cannot be walked.
 """
 
 from __future__ import annotations
@@ -32,6 +39,26 @@ DEFAULT_PORT = 8790
 
 def _token() -> str:
     return os.environ.get("FH_CONSOLE_TOKEN", "").strip()
+
+
+# Pairing attempts are counted per client address. A six-character code from a
+# 31-letter alphabet is ~887 million possibilities, so the only real risk is a
+# script hammering the endpoint; a small budget makes that hopeless while
+# leaving room for a person mistyping.
+_PAIR_ATTEMPTS: dict[str, list[float]] = {}
+_PAIR_WINDOW = 60.0
+_PAIR_LIMIT = 10
+
+
+def _pair_allowed(addr: str) -> bool:
+    now = time.time()
+    recent = [t for t in _PAIR_ATTEMPTS.get(addr, []) if now - t < _PAIR_WINDOW]
+    if len(recent) >= _PAIR_LIMIT:
+        _PAIR_ATTEMPTS[addr] = recent
+        return False
+    recent.append(now)
+    _PAIR_ATTEMPTS[addr] = recent
+    return True
 
 
 def _is_bot(pid: int) -> bool:
@@ -135,6 +162,51 @@ def _proxy(path: str, method: str = "GET", body: dict | None = None) -> tuple[in
         return 503, {"error": "bot is not running", "running": False}
 
 
+# Verifying a device token costs a loopback call, and the app polls every few
+# seconds, so a short cache keeps that off the hot path. Revocation still takes
+# effect within the TTL, and `+revoke` is not a security race against 30s.
+_DEVICE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_DEVICE_TTL = 30.0
+
+
+def _device_cached(token: str) -> dict[str, Any] | None:
+    hit = _DEVICE_CACHE.get(token)
+    now = time.time()
+    if hit and now - hit[0] < _DEVICE_TTL:
+        return hit[1]
+    device = _DEVICE_LOOKUP(token)
+    # A miss is cached too, otherwise anyone sending garbage tokens makes the
+    # supervisor issue a loopback request per attempt.
+    _DEVICE_CACHE[token] = (now, device)
+    if len(_DEVICE_CACHE) > 512:
+        _DEVICE_CACHE.clear()
+    return device
+
+
+def _device_for(token: str) -> dict[str, Any] | None:
+    """Ask the bot whether a paired-device token is valid.
+
+    The registry lives in the bot process, so this is a loopback call rather
+    than shared state. Returns the device row when valid.
+    """
+    if not token:
+        return None
+    req = urllib.request.Request(
+        f"{BOT_API}/api/devices",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            payload = json.loads(r.read() or b"{}")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return payload.get("device")
+
+
+# Indirection so tests can replace the lookup without touching the network.
+_DEVICE_LOOKUP = _device_for
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "FreehandsConsole/1.0"
@@ -156,18 +228,24 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authed(self) -> bool:
-        expected = _token()
         got = (self.headers.get("Authorization") or "").replace("Bearer ", "").strip()
-        if not expected:
+        if not got:
             return False
-        # Constant-time compare: a remote control endpoint should not leak the
-        # token length or a matching prefix through response timing.
-        if len(got) != len(expected):
-            return False
-        diff = 0
-        for a, b in zip(got, expected):
-            diff |= ord(a) ^ ord(b)
-        return diff == 0
+        expected = _token()
+        if expected:
+            # Constant-time compare: a remote control endpoint should not leak
+            # the token length or a matching prefix through response timing.
+            if len(got) == len(expected):
+                diff = 0
+                for a, b in zip(got, expected):
+                    diff |= ord(a) ^ ord(b)
+                if diff == 0:
+                    return True
+        device = _device_cached(got)
+        if device is not None:
+            self.device = device
+            return True
+        return False
 
     def _body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -188,7 +266,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
         if path == "/api/power":
-            return self._send(200, {"running": _alive(), "pid": _read_pid()})
+            return self._send(200, {
+                "running": _alive(), "pid": _read_pid(),
+                "device": getattr(self, "device", None),
+            })
         query = ("?" + self.path.split("?", 1)[1]) if "?" in self.path else ""
         if path in ("/api/status", "/api/log", "/api/commands", "/api/settings"):
             status, payload = _proxy(path + query)
@@ -196,9 +277,22 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        path = self.path.split("?")[0]
+        # Pairing must work before a device has a token. The code is the
+        # credential, and _pair_allowed stops the endpoint being brute-forced.
+        if path == "/api/pair":
+            if not _pair_allowed(self.client_address[0]):
+                return self._send(429, {"error": "too many attempts, wait a minute"})
+            body = self._body()
+            # Only claiming is reachable from outside. Opening a code stays in
+            # Discord, so a code can only come from an operator running +pair;
+            # otherwise anyone could mint codes and phish one out of you.
+            if str(body.get("action") or "").lower() != "claim":
+                return self._send(400, {"error": "action must be claim"})
+            status, payload = _proxy("/api/pair", "POST", body)
+            return self._send(status, payload)
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
-        path = self.path.split("?")[0]
         body = self._body()
         if path == "/api/power":
             action = (body.get("action") or "").lower()
@@ -220,14 +314,26 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
 
-def main() -> int:
+def main(serve: bool = True) -> int:
     if not _token():
-        print("FH_CONSOLE_TOKEN is not set; refusing to expose an open control API.")
-        return 2
+        # Not fatal any more: devices pair themselves, and a paired device is
+        # the normal credential. The endpoint is still closed to everyone
+        # without one, so this is a notice rather than a refusal.
+        print("No FH_CONSOLE_TOKEN set; only paired devices can connect.")
+        print("Run +pair in Discord, then enter the code in the app.")
     port = int(os.environ.get("FH_CONSOLE_PORT", DEFAULT_PORT))
+    # The bot has to be running before anyone can pair, because the pairing
+    # code is issued by a Discord command. Starting it here means a fresh
+    # machine reaches a usable state with no manual step.
+    started = _start()
+    print(f"bot: {started}")
+
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
     print(f"Freehands console API on 0.0.0.0:{port}")
+    if not serve:
+        server.server_close()
+        return 0
     try:
         server.serve_forever()
     except KeyboardInterrupt:
