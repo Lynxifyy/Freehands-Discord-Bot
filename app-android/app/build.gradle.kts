@@ -30,8 +30,8 @@ val canSign = ksFile != null && ksStorePassword != null && ksKeyAlias != null &&
 // Version comes from the tag in CI (-PappVersionName=v1.0.0) and falls back to a
 // literal for local builds. versionCode must only ever go up, or Android refuses
 // the update and users have to uninstall first.
-val appVersionName: String = (findProperty("appVersionName") as String?)?.removePrefix("v") ?: "1.5.0"
-val appVersionCode: Int = (findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 7
+val appVersionName: String = (findProperty("appVersionName") as String?)?.removePrefix("v") ?: "1.6.0"
+val appVersionCode: Int = (findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 8
 
 android {
     namespace = "com.freehands.console"
