@@ -75,6 +75,9 @@ class Engine:
             self.channels.add(self.ops.channel_id)
         for cid in (store.settings.room_channels or {}).values():
             self.channels.add(int(cid))
+        # Cleared the first time the audit log answers 403: the bot is not a
+        # moderator, so every delete would retry a request that cannot succeed.
+        self._can_audit = True
         from . import cmd_impl  # local import keeps the registry wiring in one place
 
         cmd_impl.register(self)
@@ -172,13 +175,68 @@ class Engine:
                 self.dispatch(command, user_id, message_id, channel_id, roles)
 
     def on_message_delete(self, data: dict[str, Any]) -> None:
-        """Attach the deleted text from the cache.
+        """Recover who deleted what, and what was said.
 
-        Discord's delete event carries only channel and message ids, so the
-        content has to come from what we logged when it was posted.
+        Discord's delete event carries only channel and message ids. The
+        content comes from what we logged when it was posted, and the *deleter*
+        only exists in the audit log, so both are resolved here. Without the
+        audit lookup the console has no name to show and prints "unknown".
         """
         mid = str(data.get("id") or "")
-        self.events.deleted(data, self.events.find_message(mid))
+        cached = self.events.find_message(mid)
+        actor = self._delete_actor(int(data.get("channel_id") or 0), mid)
+        self.events.deleted(data, cached, actor)
+
+    # AUDIT_LOG action types we care about. 72 is MESSAGE_DELETE.
+    AUDIT_MESSAGE_DELETE = 72
+
+    def _delete_actor(self, channel_id: int, message_id: str) -> dict[str, str]:
+        """Ask the audit log who deleted a message.
+
+        This costs one REST call per delete, so it is skipped entirely when the
+        bot cannot read the audit log (a non-moderator bot gets 403). A failed
+        lookup is not an error: the record still carries the message and its
+        author, which is most of the value.
+        """
+        if not channel_id or not self._can_audit:
+            return {}
+        try:
+            entries = self.rest.audit(
+                GUILD_ID, self.AUDIT_MESSAGE_DELETE, limit=10
+            )
+        except Exception as exc:  # noqa: BLE001 - a lookup must not break logging
+            # A 403 means the bot will never be able to do this; remember that
+            # so every delete does not retry the same doomed request.
+            if "403" in str(exc):
+                self._can_audit = False
+            log.warning("audit lookup for %s failed: %r", message_id, exc)
+            return {}
+
+        for entry in entries or []:
+            target = str(entry.get("target_id") or "")
+            if target != str(message_id):
+                continue
+            user = entry.get("user") or {}
+            uid = str(user.get("id") or "")
+            if not uid:
+                continue
+            if uid == str(BOT_ID):
+                return {"id": uid, "name": "Freehands (automod)"}
+            return {"id": uid, "name": self._name_of(uid)}
+        return {}
+
+    def _name_of(self, user_id: str) -> str:
+        """A display name for an id, preferring what we already know.
+
+        The audit entry carries the id only. A guild member read per delete
+        would be wasteful and rate-limited, so the cache is consulted first and
+        the id itself is the last resort.
+        """
+        for row in self.events.recent(limit=200, after=0):
+            author = row.get("author") or {}
+            if str(author.get("id") or "") == str(user_id) and author.get("name"):
+                return str(author["name"])
+        return f"user {user_id}"
 
     def on_message_update(self, data: dict[str, Any]) -> None:
         mid = str(data.get("id") or "")

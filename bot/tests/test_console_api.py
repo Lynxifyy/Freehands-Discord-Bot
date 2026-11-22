@@ -167,3 +167,28 @@ class PairRateLimitTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientIpStampTests(unittest.TestCase):
+    """The supervisor is the only process that sees the real client address.
+
+    The bot listens on loopback, so without this stamp every device would be
+    recorded as 127.0.0.1 and `+devices` would be unable to say where a phone
+    paired from.
+    """
+
+    def _ip(self, headers, peer="127.0.0.1"):
+        import console_api
+
+        return console_api._client_ip(headers, peer)
+
+    def test_the_forwarded_address_is_used(self):
+        self.assertEqual(
+            self._ip({"X-Forwarded-For": "8.8.8.8, 10.0.0.1"}), "8.8.8.8"
+        )
+
+    def test_a_direct_connection_falls_back_to_the_peer(self):
+        self.assertEqual(self._ip({}, "1.1.1.1"), "1.1.1.1")
+
+    def test_an_empty_forwarded_header_is_ignored(self):
+        self.assertEqual(self._ip({"X-Forwarded-For": "  "}, "1.0.0.1"), "1.0.0.1")

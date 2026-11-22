@@ -9,8 +9,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,16 +54,38 @@ fun CommandsTab(commands: List<CommandInfo>) {
                 listOf("owner", "mod", "user").forEach { tier ->
                     val list = grouped[tier] ?: return@forEach
                     item(key = "h-$tier") {
-                        Text(
-                            when (tier) {
-                                "owner" -> "Owner only"
-                                "mod" -> "Moderators"
-                                else -> "Everyone"
-                            },
-                            color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp,
-                            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
-                        )
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier
+                                    .width(3.dp).height(12.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(
+                                        when (tier) {
+                                            "owner" -> Danger
+                                            "mod" -> Warn
+                                            else -> Brand
+                                        }
+                                    )
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                when (tier) {
+                                    "owner" -> "Owner only"
+                                    "mod" -> "Moderators"
+                                    else -> "Everyone"
+                                },
+                                color = Color(0xFFB9C4D2), fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold, letterSpacing = 1.4.sp,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                "${list.size}", color = MutedDim, fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
                     }
                     items(list, key = { it.name }) { cmd ->
                         CommandRow(cmd) { open = cmd }
@@ -75,12 +101,16 @@ fun CommandsTab(commands: List<CommandInfo>) {
 
 @Composable
 private fun CommandRow(cmd: CommandInfo, onClick: () -> Unit) {
-    Card(
-        Modifier.fillMaxWidth().clickable { onClick() },
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Panel),
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    val accent = when (cmd.tier) {
+        "owner" -> Danger
+        "mod" -> Warn
+        else -> Brand
+    }
+    SurfaceCard(Modifier.clickable { onClick() }, accent = accent) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(Modifier.weight(1f)) {
                 Text(
                     cmd.usage.ifBlank { "+${cmd.name}" },
@@ -88,9 +118,13 @@ private fun CommandRow(cmd: CommandInfo, onClick: () -> Unit) {
                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(3.dp))
-                Text(cmd.summary, color = Muted, fontSize = 11.sp)
+                Text(
+                    cmd.summary, color = Muted, fontSize = 11.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             }
-            Text("›", color = Muted, fontSize = 20.sp)
+            Spacer(Modifier.width(8.dp))
+            Text("\u203A", color = accent.copy(alpha = 0.7f), fontSize = 18.sp)
         }
     }
 }

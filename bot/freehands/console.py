@@ -112,9 +112,18 @@ class BotApi:
             log.info("pairing code opened for console")
             return 200, {"ok": True, "code": code, "expires_in": 300}
         if action == "claim":
+            # The address is forwarded by the supervisor, which is the only
+            # process that sees the real client. It is recorded, not trusted:
+            # a VPN or mobile carrier will place the phone elsewhere.
+            from .geolocate import describe
+
+            ip = str(body.get("ip") or "").strip()
             token = self.engine.pairing.claim(
                 str(body.get("code") or ""),
                 name=str(body.get("name") or ""),
+                ip=ip,
+                location=describe(ip) if ip else "",
+                app_version=str(body.get("app_version") or ""),
             )
             if token is None:
                 return 404, {"error": "unknown or expired code"}

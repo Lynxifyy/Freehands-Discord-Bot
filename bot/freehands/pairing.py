@@ -52,6 +52,14 @@ class Device:
     created: float = field(default_factory=time.time)
     last_seen: float = 0.0
     paired_by: str = ""
+    # Where the phone paired from. Kept so `+devices` can answer "which phone
+    # is this, and is it where it should be?" - a pairing from an unexpected
+    # country is the signal that a token leaked.
+    ip: str = ""
+    location: str = ""
+    last_ip: str = ""
+    # Which app build paired, so a stale install is visible in the list.
+    app_version: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -61,6 +69,10 @@ class Device:
             "created": self.created,
             "last_seen": self.last_seen,
             "paired_by": self.paired_by,
+            "ip": self.ip,
+            "location": self.location,
+            "last_ip": self.last_ip,
+            "app_version": self.app_version,
         }
 
     @staticmethod
@@ -72,6 +84,10 @@ class Device:
             created=float(raw.get("created", 0.0)),
             last_seen=float(raw.get("last_seen", 0.0)),
             paired_by=str(raw.get("paired_by", "")),
+            ip=str(raw.get("ip", "")),
+            location=str(raw.get("location", "")),
+            last_ip=str(raw.get("last_ip", "")),
+            app_version=str(raw.get("app_version", "")),
         )
 
 
@@ -120,7 +136,8 @@ class Pairing:
         return self._pending.pop(normalise(code), None) is not None
 
     # -- claiming ---------------------------------------------------------
-    def claim(self, code: str, paired_by: str = "", name: str = "") -> str | None:
+    def claim(self, code: str, paired_by: str = "", name: str = "",
+              ip: str = "", location: str = "", app_version: str = "") -> str | None:
         """Consume a code and return the new device token, or None.
 
         The caller shows the token to the operator once. It is not recoverable
@@ -137,6 +154,10 @@ class Pairing:
             name=(name.strip()[:40] or row["name"]),
             token_hash=_hash(token),
             paired_by=paired_by,
+            ip=ip,
+            location=location,
+            last_ip=ip,
+            app_version=app_version[:24],
         )
         self._save()
         return token
@@ -155,6 +176,16 @@ class Pairing:
         if match is not None:
             match.last_seen = time.time()
         return match
+
+    def touch(self, device: "Device", ip: str = "") -> None:
+        """Record that a device was seen, without rewriting the whole store.
+
+        `last_seen` is already set by `verify`; the address is only worth
+        persisting when it changed, so a chatty poll does not rewrite state.
+        """
+        if ip and ip != device.last_ip:
+            device.last_ip = ip
+            self._save()
 
     def revoke(self, device_id: str) -> bool:
         if self.devices.pop(device_id, None) is None:

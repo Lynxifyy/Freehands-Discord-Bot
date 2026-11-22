@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,19 +25,29 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,9 +68,14 @@ import com.freehands.console.ui.Danger
 import com.freehands.console.ui.Ink
 import com.freehands.console.ui.LogTab
 import com.freehands.console.ui.Muted
+import com.freehands.console.ui.MutedDim
 import com.freehands.console.ui.Panel
 import com.freehands.console.ui.PanelAlt
+import com.freehands.console.ui.BrandBright
+import com.freehands.console.ui.BrandMark
+import com.freehands.console.ui.Hairline
 import com.freehands.console.ui.SettingsTab
+import com.freehands.console.ui.SplashScreen
 import com.freehands.console.ui.StatusPill
 
 private val scheme = darkColorScheme(
@@ -123,7 +140,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = scheme) {
                 Box(Modifier.fillMaxSize().background(Ink)) {
-                    App()
+                    var splashDone by rememberSaveable { mutableStateOf(false) }
+                    Crossfade(
+                        targetState = splashDone,
+                        animationSpec = tween(650),
+                        label = "splash",
+                    ) { done ->
+                        if (done) App() else SplashScreen { splashDone = true }
+                    }
                 }
             }
         }
@@ -160,39 +184,66 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
         return
     }
 
-    var tab by remember { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableStateOf(0) }
 
     Scaffold(
         containerColor = Ink,
         bottomBar = {
-            NavigationBar(containerColor = Panel, tonalElevation = 0.dp) {
-                val items = listOf("Live", "Commands", "Settings")
-                items.forEachIndexed { i, label ->
-                    NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        icon = {
-                            Text(
-                                when (i) {
-                                    0 -> "▤"
-                                    1 -> "❯"
-                                    else -> "⚙"
-                                },
-                                fontSize = 15.sp,
-                                color = if (tab == i) Brand else Muted,
-                            )
-                        },
-                        label = {
-                            Text(
-                                label, fontSize = 10.sp,
-                                color = if (tab == i) Brand else Muted,
-                                fontWeight = if (tab == i) FontWeight.Bold else FontWeight.Normal,
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = Brand.copy(alpha = 0.14f),
-                        ),
+            // A custom bar rather than NavigationBar: the default draws a flat
+            // strip with equal-weight items, which is most of why the app read
+            // as plain. This one floats, highlights the active tab with a
+            // gradient pill, and uses real icons.
+            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Panel)
+                        .border(1.dp, Hairline, RoundedCornerShape(18.dp))
+                        .padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val items = listOf(
+                        Triple("Live", Icons.Rounded.Bolt, 0),
+                        Triple("Commands", Icons.Rounded.Terminal, 1),
+                        Triple("Settings", Icons.Rounded.Tune, 2),
                     )
+                    items.forEach { (label, icon, i) ->
+                        val active = tab == i
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(13.dp))
+                                .then(
+                                    if (active) Modifier.background(
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                Brand.copy(alpha = 0.30f),
+                                                Brand.copy(alpha = 0.12f),
+                                            )
+                                        )
+                                    ) else Modifier
+                                )
+                                .clickable { tab = i }
+                                .padding(vertical = 9.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = label,
+                                tint = if (active) BrandBright else MutedDim,
+                                modifier = Modifier.size(17.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                label,
+                                color = if (active) Color.White else Muted,
+                                fontSize = 11.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -205,28 +256,31 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
                 error = state.error,
             )
             Box(Modifier.fillMaxSize()) {
-                when (tab) {
-                    0 -> LogTab(
-                        rows = state.rows,
-                        running = state.running,
-                        live = state.live,
-                        busy = state.busy,
-                        counts = state.counts,
-                        onTogglePower = vm::togglePower,
-                        onTest = vm::runTest,
-                        testing = state.testing,
-                        test = state.test,
-                        onDismissTest = vm::clearTest,
-                    )
-                    1 -> CommandsTab(commands = state.commands)
-                    else -> SettingsTab(
-                        settings = state.settings,
-                        creator = state.creator,
-                        busy = state.busy,
-                        onToggle = { k, v -> vm.setSetting(k, v) },
-                        onSelect = { k, v -> vm.setSetting(k, v) },
-                        onForceRestart = vm::forceRestart,
-                    )
+                // Crossfade between tabs so switching does not snap.
+                Crossfade(targetState = tab, animationSpec = tween(180), label = "tab") { t ->
+                    when (t) {
+                        0 -> LogTab(
+                            rows = state.rows,
+                            running = state.running,
+                            live = state.live,
+                            busy = state.busy,
+                            counts = state.counts,
+                            onTogglePower = vm::togglePower,
+                            onTest = vm::runTest,
+                            testing = state.testing,
+                            test = state.test,
+                            onDismissTest = vm::clearTest,
+                        )
+                        1 -> CommandsTab(commands = state.commands)
+                        else -> SettingsTab(
+                            settings = state.settings,
+                            creator = state.creator,
+                            busy = state.busy,
+                            onToggle = { k, v -> vm.setSetting(k, v) },
+                            onSelect = { k, v -> vm.setSetting(k, v) },
+                            onForceRestart = vm::forceRestart,
+                        )
+                    }
                 }
             }
         }
@@ -235,22 +289,50 @@ private fun App(vm: ConsoleViewModel = viewModel()) {
 
 @Composable
 private fun Header(running: Boolean, live: Boolean, botName: String, error: String?) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BrandMark(34)
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "FREEHANDS", color = Color.White, fontSize = 16.sp,
+                fontWeight = FontWeight.Bold, letterSpacing = 2.4.sp,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "FREEHANDS", color = Color.White, fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
+                    if (botName.isNotBlank()) "Eternal" else "Eternal console",
+                    color = MutedDim, fontSize = 9.sp, letterSpacing = 1.sp,
                 )
-                Text(
-                    if (botName.isNotBlank()) "Eternal  ·  $botName" else "Eternal console",
-                    color = Muted, fontSize = 10.sp,
-                )
+                if (botName.isNotBlank()) {
+                    Text("  ·  ", color = MutedDim, fontSize = 9.sp)
+                    Text(
+                        botName, color = BrandBright, fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
-            StatusPill(running, live)
         }
-        if (error != null) {
-            Spacer(Modifier.height(6.dp))
+        StatusPill(running, live)
+    }
+    if (error != null) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Danger.copy(alpha = 0.10f))
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.WarningAmber, contentDescription = null,
+                tint = Danger, modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(7.dp))
             Text(
                 error, color = Danger, fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace, maxLines = 2,

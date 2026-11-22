@@ -97,6 +97,22 @@ _PAIR_WINDOW = 60.0
 _PAIR_LIMIT = 10
 
 
+def _client_ip(headers, peer: str) -> str:
+    """The address a request really came from.
+
+    This host sits behind a proxy, so `peer` is the proxy and the real address
+    is in a forwarding header. Only the first hop is taken: the rest of the list
+    is client-controlled, so trusting it would let anyone claim any location.
+    """
+    for name in ("X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP"):
+        raw = headers.get(name) if headers else None
+        if raw:
+            first = str(raw).split(",")[0].strip()
+            if first:
+                return first
+    return (peer or "").strip()
+
+
 def _pair_allowed(addr: str) -> bool:
     now = time.time()
     recent = [t for t in _PAIR_ATTEMPTS.get(addr, []) if now - t < _PAIR_WINDOW]
@@ -380,6 +396,10 @@ class Handler(BaseHTTPRequestHandler):
             # otherwise anyone could mint codes and phish one out of you.
             if str(body.get("action") or "").lower() != "claim":
                 return self._send(400, {"error": "action must be claim"})
+            # The bot cannot see the client: it listens on loopback. The real
+            # address is stamped here so `+devices` can report where a phone
+            # paired from. It is advisory only and never used for auth.
+            body["ip"] = _client_ip(self.headers, self.client_address[0])
             status, payload = _proxy("/api/pair", "POST", body)
             return self._send(status, payload)
         if not self._authed():
