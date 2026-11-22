@@ -1,8 +1,37 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Signing material is never committed. Locally it comes from keystore.properties
+// beside this file; in CI the workflow writes the same file from repository
+// secrets. When neither is present the release APK is left unsigned, which is
+// fine for a local build but not for something people install.
+val keystoreProps = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingValue(key: String, env: String): String? =
+    (keystoreProps.getProperty(key) ?: System.getenv(env))?.takeIf { it.isNotBlank() }
+
+// Named with a `ks` prefix on purpose: inside the signingConfig block below,
+// `storeFile` and friends resolve to the signing config's own properties, so a
+// same-named outer val would be shadowed and read back as null.
+val ksFile = signingValue("storeFile", "FH_KEYSTORE_PATH")
+val ksStorePassword = signingValue("storePassword", "FH_KEYSTORE_PASSWORD")
+val ksKeyAlias = signingValue("keyAlias", "FH_KEY_ALIAS")
+val ksKeyPassword = signingValue("keyPassword", "FH_KEY_PASSWORD")
+val canSign = ksFile != null && ksStorePassword != null && ksKeyAlias != null && ksKeyPassword != null
+
+// Version comes from the tag in CI (-PappVersionName=v1.0.0) and falls back to a
+// literal for local builds. versionCode must only ever go up, or Android refuses
+// the update and users have to uninstall first.
+val appVersionName: String = (findProperty("appVersionName") as String?)?.removePrefix("v") ?: "1.0.0"
+val appVersionCode: Int = (findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
 
 android {
     namespace = "com.freehands.console"
@@ -12,8 +41,23 @@ android {
         applicationId = "com.freehands.console"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
+    }
+
+    signingConfigs {
+        if (canSign) {
+            create("release") {
+                storeFile = file(ksFile!!)
+                storePassword = ksStorePassword
+                keyAlias = ksKeyAlias
+                keyPassword = ksKeyPassword
+                // Both schemes: v1 for old devices, v2/v3 for current ones.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     buildFeatures {
@@ -31,7 +75,24 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            if (canSign) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
+    // Names the artifact after the version so a downloaded file is identifiable
+    // without opening it.
+    applicationVariants.all {
+        outputs.all {
+            val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            out.outputFileName = "freehands-$appVersionName.apk"
         }
     }
 }

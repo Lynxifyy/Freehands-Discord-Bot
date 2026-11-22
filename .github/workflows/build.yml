@@ -1,0 +1,143 @@
+name: build
+
+# Two ways in. Pushing a v* tag builds, signs and publishes a GitHub Release,
+# which is the normal path. The manual trigger builds and uploads the APK as a
+# workflow artifact without touching releases, for testing a build.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Version name for a manual build (e.g. 1.0.1)"
+        required: false
+        default: ""
+      version_code:
+        description: "Version code, must be higher than the last release"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  # A second push to the same tag should replace the first run, not race it.
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The APK is useless unsigned: Android refuses to install it, and a debug
+      # key cannot be reused for an update. Fail here with a clear message
+      # rather than after a five minute build.
+      - name: Check signing secrets are present
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FH_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.FH_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.FH_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.FH_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$KEYSTORE_BASE64" ] || missing="$missing FH_KEYSTORE_BASE64"
+          [ -n "$STORE_PASSWORD" ] || missing="$missing FH_KEYSTORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ] || missing="$missing FH_KEY_ALIAS"
+          [ -n "$KEY_PASSWORD" ] || missing="$missing FH_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "See app-android/README.md for how to create and store them."
+            exit 1
+          fi
+
+      - name: Decode the keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.FH_KEYSTORE_BASE64 }}
+        run: |
+          # Written outside the checkout so it cannot be picked up by any
+          # wildcard copy or accidentally archived with the source.
+          mkdir -p "$RUNNER_TEMP/signing"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/signing/release.jks"
+          chmod 600 "$RUNNER_TEMP/signing/release.jks"
+          echo "FH_KEYSTORE_PATH=$RUNNER_TEMP/signing/release.jks" >> "$GITHUB_ENV"
+
+      - name: Work out the version
+        id: version
+        env:
+          INPUT_NAME: ${{ inputs.version_name }}
+          INPUT_CODE: ${{ inputs.version_code }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            name="${GITHUB_REF_NAME#v}"
+          else
+            name="${INPUT_NAME:-0.0.0-dev}"
+          fi
+          code="${INPUT_CODE:-${GITHUB_RUN_NUMBER}}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Building version $name (code $code)"
+
+      # Tests are fast and catch a broken API contract before it ships.
+      - name: Run the bot test suite
+        run: python3 -m unittest discover -s bot/tests -t bot
+
+      - name: Build the release APK
+        env:
+          FH_KEYSTORE_PASSWORD: ${{ secrets.FH_KEYSTORE_PASSWORD }}
+          FH_KEY_ALIAS: ${{ secrets.FH_KEY_ALIAS }}
+          FH_KEY_PASSWORD: ${{ secrets.FH_KEY_PASSWORD }}
+        working-directory: app-android
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon \
+            -PappVersionName="${{ steps.version.outputs.name }}" \
+            -PappVersionCode="${{ steps.version.outputs.code }}"
+
+      # Prove the artifact is signed with the release key, not silently left
+      # unsigned or signed with a debug key.
+      - name: Verify the APK is signed
+        working-directory: app-android
+        run: |
+          APK="app/build/outputs/apk/release/freehands-${{ steps.version.outputs.name }}.apk"
+          if [ ! -f "$APK" ]; then
+            echo "::error::Expected APK not found: $APK"
+            ls -R app/build/outputs/apk || true
+            exit 1
+          fi
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -r | head -1)
+          "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/certs.txt
+          if grep -qi "Android Debug" /tmp/certs.txt; then
+            echo "::error::APK is signed with a debug key"
+            exit 1
+          fi
+          echo "Signed OK"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+      - name: Upload the APK as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: freehands-apk
+          path: ${{ env.APK }}
+          if-no-files-found: error
+
+      - name: Publish the GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.name }}
+          APK: ${{ env.APK }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Freehands ${VERSION}" \
+            --generate-notes
