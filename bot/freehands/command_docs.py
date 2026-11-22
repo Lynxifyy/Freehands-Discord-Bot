@@ -77,6 +77,9 @@ DETAILS: dict[str, str] = {
              "Only messages the bot can remove are affected.",
     "strikes": "Shows how many strikes a member has and what each one was for.",
     "unmute": "Clears a timeout early so the member can speak again.",
+    "test": "Checks that the bot really works: the Discord token, the gateway, "
+            "the guild, the console log, pairing and the command list. Each "
+            "line says OK or FAIL, so you can see what is broken at a glance.",
     "pair": "Connects the phone app without typing a URL or a token. Run +pair "
             "with no code and the bot gives you a six-character code; the app "
             "shows the same code, and you run +pair <code> with it. The phone "

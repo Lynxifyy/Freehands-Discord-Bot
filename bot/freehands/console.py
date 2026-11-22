@@ -53,6 +53,24 @@ class BotApi:
             }
         return self._identity
 
+    def selftest(self) -> dict[str, Any]:
+        """Run `+test`'s checks and return them as data for the app.
+
+        Same checks as the Discord command: a phone that shows green must mean
+        the same thing as `+test` saying OK in Discord.
+        """
+        from . import test_command
+
+        results = []
+        for name, fn in test_command.CHECKS:
+            ok, detail = test_command._check(name, lambda f=fn: f(self.engine))
+            results.append({"name": name, "ok": ok, "detail": detail})
+        return {
+            "passed": sum(1 for r in results if r["ok"]),
+            "total": len(results),
+            "checks": results,
+        }
+
     def status(self) -> dict[str, Any]:
         e = self.engine
         s = e.settings
@@ -177,6 +195,8 @@ class BotApi:
                             int(query.get("limit", 100)), int(query.get("after", 0))))
                     if path == "/api/commands":
                         return _json(self, 200, api.commands())
+                    if path == "/api/selftest":
+                        return _json(self, 200, api.selftest())
                     if path == "/api/settings":
                         return _json(self, 200, api.settings())
                     if path == "/api/devices":

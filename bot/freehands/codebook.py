@@ -221,15 +221,51 @@ DEFAULT_CODES: dict[int, Code] = {
     ),
 }
 
-_CODE_PATTERNS = (
-    re.compile(r"\bcode\s*[-:#]?\s*(\d{1,3})\b", re.I),
-    re.compile(r"\bcode\s*[-:#]?\s*(i{1,3}|iv|vi{0,3}|ix|xi{0,2}|x)\b", re.I),
-    re.compile(r"\bcode\s*[-:#]?\s*(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b", re.I),
+# One pass covers digits, roman numerals and spelled-out numbers. Three
+# separate patterns used to mean three full scans of every message.
+_CODE_PATTERN = re.compile(
+    r"\bcode\s*[-:#]?\s*(\d{1,3}"
+    r"|i{1,3}|iv|vi{0,3}|ix|xi{0,2}|x"
+    r"|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b",
+    re.I,
 )
+
+
+# Leet spellings of the word "code" only. Folding digits across the whole
+# message would turn "code 10" into "code io", so the number is left alone.
+_LEET_CODE = re.compile(
+    r"\b[ck][\s._*~|/-]*[o0][\s._*~|/-]*d[\s._*~|/-]*[e3]\b", re.I)
 
 
 def _normalise(text: str) -> str:
     return re.sub(r"[\u2018\u2019]", "'", text.lower())
+
+
+def _code_number(token: str) -> int | None:
+    """Turn the captured token (digit, roman or word) into a code number."""
+    if token.isdigit():
+        return int(token)
+    return _ROMAN.get(token) or _WORD_NUMBERS.get(token)
+
+
+def _first_code(text: str, codes: dict[int, "Code"]) -> Hit | None:
+    for match in _CODE_PATTERN.finditer(text):
+        number = _code_number(match.group(1).lower())
+        if number in codes:
+            return Hit(codes[number], "number", match.group(0))
+    return None
+
+
+def _loose(text: str) -> str:
+    """A de-obfuscated copy, used only when the plain form finds nothing.
+
+    People type codes in a hurry and Discord users obfuscate words to dodge
+    filters, so `c0de 8`, `cod3 8` and `c o d e 8` all mean the same thing. The
+    copy folds lookalike characters and strips separators between single
+    characters, which leaves normal sentences intact.
+    """
+    # "c0de", "cod3", "c0d3", "kode", "c o d e", "c.o.d.e" -> "code".
+    return _LEET_CODE.sub("code", text)
 
 
 @dataclass
@@ -243,6 +279,7 @@ class Hit:
 class Codebook:
     codes: dict[int, Code] = field(default_factory=lambda: dict(DEFAULT_CODES))
     _alias_index: dict[str, int] = field(default_factory=dict, repr=False)
+    _alias_re: re.Pattern[str] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self._rebuild_aliases()
@@ -253,6 +290,14 @@ class Codebook:
             for alias in code.aliases:
                 index[_normalise(alias)] = code.number
         self._alias_index = index
+        # Compiling one alternation turns 48 regex searches per message into a
+        # single scan. Longest alias first so the more specific phrase wins at
+        # the same starting position.
+        ordered = sorted(index, key=len, reverse=True)
+        self._alias_re: re.Pattern[str] | None = (
+            re.compile(r"(?<!\w)(?:" + "|".join(re.escape(a) for a in ordered) + r")(?!\w)")
+            if ordered else None
+        )
 
     # -- loading ----------------------------------------------------------
     @classmethod
@@ -295,24 +340,27 @@ class Codebook:
         """Return the first recognised code in `text`, if any."""
         if not text:
             return None
+        # "code" has to appear before any pattern can match, so a substring
+        # test skips the regex entirely for ordinary chatter.
         lowered = _normalise(text)
+        if "code" in lowered:
+            hit = _first_code(lowered, self.codes)
+            if hit is not None:
+                return hit
 
-        for index, pattern in enumerate(_CODE_PATTERNS):
-            for match in pattern.finditer(lowered):
-                token = match.group(1)
-                if index == 0:
-                    number = int(token)
-                elif index == 1:
-                    number = _ROMAN.get(token)
-                else:
-                    number = _WORD_NUMBERS.get(token)
+        if self._alias_re is not None:
+            match = self._alias_re.search(lowered)
+            if match is not None:
+                alias = match.group(0)
+                number = self._alias_index.get(alias)
                 if number in self.codes:
-                    return Hit(self.codes[number], "number", match.group(0))
+                    return Hit(self.codes[number], "phrase", alias)
 
-        for alias, number in self._alias_index.items():
-            if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", lowered):
-                return Hit(self.codes[number], "phrase", alias)
-        return None
+        # Nothing matched plainly, so try the de-obfuscated form. This costs an
+        # extra pass but only on messages that did not already trigger, and it
+        # closes the "c0de 8" hole that a plain scan walks straight past.
+        loose = _loose(lowered)
+        return _first_code(loose, self.codes) if loose != lowered else None
 
     def get(self, number: int) -> Code | None:
         return self.codes.get(number)

@@ -104,6 +104,13 @@ def register(engine) -> None:
              detail="Cut off one paired phone, or all of them. Use this if a "
                     "device is lost or a token leaks."))
 
+    from . import test_command
+    add(Spec("test", _bind(engine, test_command.run), "owner", "+test",
+             "check the bot is working",
+             detail="Runs live checks against Discord, the event log, the "
+                    "pairing store and the command registry, then reports what "
+                    "passed. Use it when something seems wrong."))
+
 
 def _flag(value: str) -> bool | None:
     lowered = value.strip().lower()

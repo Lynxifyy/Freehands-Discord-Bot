@@ -2,6 +2,7 @@ package com.freehands.console.data
 
 import android.app.Application
 import android.os.Build
+import com.freehands.console.BuildConfig
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.delay
@@ -27,7 +28,28 @@ data class UiState(
     val error: String? = null,
     val busy: Boolean = false,
     val live: Boolean = true,
+    val test: SelfTest? = null,
+    val testing: Boolean = false,
+    val update: UpdateInfo? = null,
+    val updateDismissed: Boolean = false,
 )
+
+/**
+ * Compares dotted versions numerically.
+ *
+ * String comparison would call 1.10.0 older than 1.9.0, which would either
+ * hide a real update or nag forever about an old one.
+ */
+internal fun isNewer(remote: String, local: String): Boolean {
+    val a = remote.trim().removePrefix("v").split(".").map { it.toIntOrNull() ?: 0 }
+    val b = local.trim().removePrefix("v").split(".").map { it.toIntOrNull() ?: 0 }
+    for (i in 0 until maxOf(a.size, b.size)) {
+        val x = a.getOrElse(i) { 0 }
+        val y = b.getOrElse(i) { 0 }
+        if (x != y) return x > y
+    }
+    return false
+}
 
 class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -43,10 +65,48 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     private var polling = false
 
     init {
+        checkForUpdate()
         if (_state.value.configured) {
             refreshCreator()
             poll()
         }
+    }
+
+    /**
+     * Asks the host for the newest release. Silent on failure: a phone that is
+     * offline or a host that cannot reach GitHub must not show an error banner
+     * for a check the operator never asked for.
+     */
+    fun checkForUpdate() {
+        viewModelScope.launch {
+            val latest = api.latestVersion() ?: return@launch
+            if (!latest.known || latest.version.isBlank()) return@launch
+            if (isNewer(latest.version, BuildConfig.VERSION_NAME)) {
+                _state.value = _state.value.copy(update = latest)
+            }
+        }
+    }
+
+    /** Runs the same checks as `+test`, so the phone and Discord agree. */
+    fun runTest() {
+        if (_state.value.testing) return
+        viewModelScope.launch {
+            _state.value = _state.value.copy(testing = true, error = null)
+            val result = runCatching { api.selfTest() }.getOrNull()
+            _state.value = _state.value.copy(
+                testing = false,
+                test = result,
+                error = if (result == null) "self-test could not run" else _state.value.error,
+            )
+        }
+    }
+
+    fun clearTest() {
+        _state.value = _state.value.copy(test = null)
+    }
+
+    fun dismissUpdate() {
+        _state.value = _state.value.copy(updateDismissed = true)
     }
 
     /**

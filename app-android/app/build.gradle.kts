@@ -115,5 +115,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // Animated GIF/WebP support. Without this Coil draws only the first frame,
+    // so a GIF in the log would look like a still picture.
+    implementation("io.coil-kt:coil-gif:2.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

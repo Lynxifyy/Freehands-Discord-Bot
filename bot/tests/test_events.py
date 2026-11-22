@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from freehands.events import EventLog, _media
+from freehands.events import EventLog, _emoji, _media
 
 
 def _log() -> EventLog:
@@ -25,15 +25,46 @@ class MediaTest(unittest.TestCase):
         self.assertEqual([r["kind"] for r in rows], ["image", "video", "audio", "file"])
 
     def test_stickers_become_a_cdn_link(self):
-        rows = _media({"stickers": [{"id": "123", "name": "wave"}]})
+        # The API sends `sticker_items`, not `stickers`.
+        rows = _media({"sticker_items": [{"id": "123", "name": "wave"}]})
         self.assertEqual(rows[0]["kind"], "sticker")
         self.assertIn("123", rows[0]["url"])
         self.assertTrue(rows[0]["url"].startswith("https://cdn.discordapp.com/stickers/"))
+
+    def test_a_gif_sticker_keeps_its_gif_extension(self):
+        rows = _media({"sticker_items": [{"id": "9", "format_type": 4}]})
+        self.assertTrue(rows[0]["url"].endswith(".gif"))
+
+    def test_the_older_stickers_key_still_works(self):
+        rows = _media({"stickers": [{"id": "123", "name": "wave"}]})
+        self.assertEqual(rows[0]["kind"], "sticker")
+
+    def test_custom_emoji_in_text_become_media(self):
+        rows = _media({}) + _emoji("hi <:wave:123456789012345678> there")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "emoji")
+        self.assertIn("123456789012345678", rows[0]["url"])
+        self.assertTrue(rows[0]["url"].endswith(".png"))
+        self.assertEqual(rows[0]["name"], ":wave:")
+
+    def test_animated_custom_emoji_use_the_gif_url(self):
+        rows = _emoji("<a:dance:987654321098765432>")
+        self.assertTrue(rows[0]["url"].endswith(".gif"))
+
+    def test_unicode_emoji_are_left_in_the_text(self):
+        self.assertEqual(_emoji("hi \N{EYES}"), [])
 
     def test_a_gif_embed_is_labelled_gif_not_embed(self):
         rows = _media({"embeds": [{"type": "gifv", "url": "https://x/y.gifv"}]})
         self.assertEqual(rows[0]["kind"], "gif")
         self.assertEqual(rows[0]["url"], "https://x/y.gifv")
+
+    def test_a_gif_embed_prefers_a_still_an_image_loader_can_draw(self):
+        # `video` is an mp4; Coil cannot render it, so the thumbnail wins.
+        rows = _media({"embeds": [{"type": "gifv",
+                                   "video": {"url": "https://x/clip.mp4"},
+                                   "thumbnail": {"url": "https://x/still.png"}}]})
+        self.assertEqual(rows[0]["url"], "https://x/still.png")
 
     def test_a_plain_embed_falls_back_to_its_thumbnail(self):
         rows = _media({"embeds": [{"type": "link",
