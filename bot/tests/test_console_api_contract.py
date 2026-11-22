@@ -70,3 +70,40 @@ class RecordShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusCachingTest(unittest.TestCase):
+    """The app polls status every few seconds; identity must not hit REST each time."""
+
+    def test_identity_is_resolved_once(self):
+        import sys
+        from pathlib import Path as P
+
+        sys.path.insert(0, str(P(__file__).resolve().parents[1]))
+        from freehands.console import BotApi
+
+        class Rest:
+            calls = 0
+
+            def me(self):
+                Rest.calls += 1
+                return {"id": "1", "username": "Freehands"}
+
+        class Settings:
+            def to_json(self):
+                return {}
+
+        class Events:
+            def counts(self):
+                return {}
+
+        class Engine:
+            rest = Rest()
+            settings = Settings()
+            events = Events()
+
+        api = BotApi(Engine())
+        for _ in range(5):
+            api.status()
+        self.assertEqual(Rest.calls, 1)
+        self.assertEqual(api.identity(), {"id": "1", "name": "Freehands"})

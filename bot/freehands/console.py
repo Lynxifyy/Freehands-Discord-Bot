@@ -38,14 +38,27 @@ class BotApi:
         self.engine = engine
         self.port = port
         self._server: ThreadingHTTPServer | None = None
+        # The bot's own identity never changes, and the app polls status every
+        # few seconds, so it is resolved once instead of hitting Discord's REST
+        # API on every poll.
+        self._identity: dict[str, str] | None = None
 
     # -- handlers ---------------------------------------------------------
+    def identity(self) -> dict[str, str]:
+        if self._identity is None:
+            me = self.engine.rest.me() or {}
+            self._identity = {
+                "id": str(me.get("id") or ""),
+                "name": me.get("username") or "",
+            }
+        return self._identity
+
     def status(self) -> dict[str, Any]:
         e = self.engine
         s = e.settings
         return {
             "running": True,
-            "bot": {"id": str(e.rest.me().get("id")), "name": e.rest.me().get("username")},
+            "bot": self.identity(),
             "settings": s.to_json(),
             "stats": {"messages": 0, "events": e.events.counts()},
             "gateway": True,
