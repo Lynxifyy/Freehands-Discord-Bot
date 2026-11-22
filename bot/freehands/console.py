@@ -82,6 +82,34 @@ class BotApi:
             })
         return {"commands": out}
 
+    def pair(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """Open or claim a pairing code for a device.
+
+        Called by the supervisor on behalf of the app, never by a browser:
+        the loopback port is not reachable from outside this machine.
+        """
+        action = str(body.get("action") or "").lower()
+        if action == "open":
+            code = self.engine.pairing.open(str(body.get("name") or "console"))
+            log.info("pairing code opened for console")
+            return 200, {"ok": True, "code": code, "expires_in": 300}
+        if action == "claim":
+            token = self.engine.pairing.claim(
+                str(body.get("code") or ""),
+                name=str(body.get("name") or ""),
+            )
+            if token is None:
+                return 404, {"error": "unknown or expired code"}
+            device = max(self.engine.pairing.devices.values(), key=lambda d: d.created)
+            return 200, {"ok": True, "token": token, "device": device.id}
+        return 400, {"error": "action must be open or claim"}
+
+    def devices(self) -> dict[str, Any]:
+        return {"devices": [
+            {"id": d.id, "name": d.name, "created": d.created, "last_seen": d.last_seen}
+            for d in sorted(self.engine.pairing.devices.values(), key=lambda d: d.created)
+        ]}
+
     def settings(self, patch: dict[str, Any] | None = None) -> dict[str, Any]:
         s = self.engine.settings
         if patch:
@@ -151,9 +179,32 @@ class BotApi:
                         return _json(self, 200, api.commands())
                     if path == "/api/settings":
                         return _json(self, 200, api.settings())
+                    if path == "/api/devices":
+                        # Called by the supervisor to check a device token.
+                        # The token itself is the credential, so a match is
+                        # returned as {"device": ...} and a miss as 401.
+                        bearer = (self.headers.get("Authorization") or "").replace("Bearer ", "").strip()
+                        device = api.engine.pairing.verify(bearer)
+                        if device is None:
+                            return _json(self, 401, {"error": "unknown device"})
+                        return _json(self, 200, {"device": {
+                            "id": device.id, "name": device.name,
+                            "created": device.created, "last_seen": device.last_seen,
+                        }})
                     return _json(self, 404, {"error": "not found"})
                 except Exception as exc:  # noqa: BLE001 - report, never kill the server
                     log.warning("bot api GET %s failed: %r", path, exc)
+                    return _json(self, 500, {"error": str(exc)})
+
+            def do_POST(self) -> None:
+                path = self.path.split("?")[0]
+                if path != "/api/pair":
+                    return _json(self, 404, {"error": "not found"})
+                try:
+                    status, payload = api.pair(self._body())
+                    return _json(self, status, payload)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("bot api POST %s failed: %r", path, exc)
                     return _json(self, 500, {"error": str(exc)})
 
             def do_PATCH(self) -> None:

@@ -29,6 +29,8 @@ class Store:
         self.questions: dict[str, dict[str, Any]] = {}
         # role ids a +bankrupt stripped, so they can be handed back later
         self.bankrupt: dict[str, dict[str, Any]] = {}
+        # Paired console devices. Holds token hashes only, never tokens.
+        self.devices: list[dict[str, Any]] = []
         self._dirty = False
         self._last_save = 0.0
 
@@ -45,6 +47,7 @@ class Store:
         self.incidents = raw.get("incidents", [])[-200:]
         self.questions = raw.get("questions", {})
         self.bankrupt = {k: dict(v) for k, v in raw.get("bankrupt", {}).items()}
+        self.devices = raw.get("devices", [])
 
     def save(self, force: bool = False) -> None:
         now = time.time()
@@ -58,6 +61,7 @@ class Store:
             "incidents": self.incidents[-200:],
             "questions": self.questions,
             "bankrupt": self.bankrupt,
+            "devices": self.devices,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".state")
