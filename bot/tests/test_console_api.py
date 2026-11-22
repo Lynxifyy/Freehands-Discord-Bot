@@ -192,3 +192,52 @@ class ClientIpStampTests(unittest.TestCase):
 
     def test_an_empty_forwarded_header_is_ignored(self):
         self.assertEqual(self._ip({"X-Forwarded-For": "  "}, "1.0.0.1"), "1.0.0.1")
+
+
+class ProxyRouteTest(unittest.TestCase):
+    """Every route the app can reach has to survive the supervisor hop.
+
+    A route missing from the whitelist answers 404, and a route whose bearer is
+    dropped answers 401/403. Both look like an empty screen in the app, so they
+    are checked here rather than discovered on a phone.
+    """
+
+    ROUTES = ("/api/people", "/api/loops", "/api/owner")
+
+    def _forwarded(self, route: str) -> list[tuple[str, str, str]]:
+        import console_api
+
+        calls: list[tuple[str, str, str]] = []
+
+        def fake_proxy(path, method="GET", body=None, token=""):
+            calls.append((path, method, token))
+            return 200, {"ok": True}
+
+        handler = console_api.Handler.__new__(console_api.Handler)
+        handler.headers = {"Authorization": "Bearer dev-token"}
+        handler.path = route
+        handler._authed = lambda: True
+        handler._send = lambda status, payload: None
+        handler._body = lambda: {}
+
+        old = console_api._proxy
+        console_api._proxy = fake_proxy
+        try:
+            handler.do_GET()
+        finally:
+            console_api._proxy = old
+        return calls
+
+    def test_every_new_route_is_proxied(self):
+        for route in self.ROUTES:
+            with self.subTest(route=route):
+                calls = self._forwarded(route)
+                self.assertTrue(calls, f"{route} answered 404 instead of proxying")
+                self.assertEqual(calls[0][0], route)
+
+    def test_the_bearer_survives_the_hop(self):
+        """The bot derives the operator from the token, so it must be passed on."""
+        for route in self.ROUTES:
+            with self.subTest(route=route):
+                _, _, token = self._forwarded(route)[0]
+                self.assertEqual(token, "dev-token", f"{route} lost the caller's token")

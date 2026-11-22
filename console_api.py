@@ -227,11 +227,17 @@ def _bot_api_up() -> bool:
         return False
 
 
-def _proxy(path: str, method: str = "GET", body: dict | None = None) -> tuple[int, Any]:
+def _proxy(path: str, method: str = "GET", body: dict | None = None,
+           token: str = "") -> tuple[int, Any]:
     data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"}
+    # The bot derives the acting operator from the device token, so the
+    # caller's credential has to survive the hop. Dropping it made every
+    # authenticated route look like an unpaired caller.
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
-        f"{BOT_API}{path}", data=data, method=method,
-        headers={"Content-Type": "application/json"},
+        f"{BOT_API}{path}", data=data, method=method, headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=6) as r:
@@ -330,8 +336,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _bearer(self) -> str:
+        return (self.headers.get("Authorization") or "").replace("Bearer ", "").strip()
+
     def _authed(self) -> bool:
-        got = (self.headers.get("Authorization") or "").replace("Bearer ", "").strip()
+        got = self._bearer()
         if not got:
             return False
         expected = _token()
@@ -378,8 +387,8 @@ class Handler(BaseHTTPRequestHandler):
             })
         query = ("?" + self.path.split("?", 1)[1]) if "?" in self.path else ""
         if path in ("/api/status", "/api/log", "/api/commands", "/api/settings",
-                    "/api/selftest"):
-            status, payload = _proxy(path + query)
+                    "/api/selftest", "/api/people", "/api/loops", "/api/owner"):
+            status, payload = _proxy(path + query, token=self._bearer())
             return self._send(status, payload)
         return self._send(404, {"error": "not found"})
 
@@ -414,6 +423,9 @@ class Handler(BaseHTTPRequestHandler):
             if action in ("restart", "force_restart"):
                 return self._send(200, _restart())
             return self._send(400, {"error": "action must be start, stop or restart"})
+        if path in ("/api/loops", "/api/loops/stop", "/api/owner"):
+            status, payload = _proxy(path, "POST", body, token=self._bearer())
+            return self._send(status, payload)
         return self._send(404, {"error": "not found"})
 
     def do_PATCH(self) -> None:
