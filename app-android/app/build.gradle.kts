@@ -30,8 +30,8 @@ val canSign = ksFile != null && ksStorePassword != null && ksKeyAlias != null &&
 // Version comes from the tag in CI (-PappVersionName=v1.0.0) and falls back to a
 // literal for local builds. versionCode must only ever go up, or Android refuses
 // the update and users have to uninstall first.
-val appVersionName: String = (findProperty("appVersionName") as String?)?.removePrefix("v") ?: "1.6.0"
-val appVersionCode: Int = (findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 8
+val appVersionName: String = (findProperty("appVersionName") as String?)?.removePrefix("v") ?: "1.6.1"
+val appVersionCode: Int = (findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 9
 
 android {
     namespace = "com.freehands.console"
@@ -50,6 +50,11 @@ android {
         val baseUrl = (findProperty("freehandsBaseUrl") as String?)
             ?: "https://work-1-jopjdcxrigxgbupp.prod-runtime.all-hands.dev"
         buildConfigField("String", "BASE_URL", "\"$baseUrl\"")
+        // The wake door. The main host is dead whenever the supervisor is, so
+        // starting it has to go to a host that is still listening.
+        val wakeUrl = (findProperty("freehandsWakeUrl") as String?)
+            ?: "https://work-2-jopjdcxrigxgbupp.prod-runtime.all-hands.dev"
+        buildConfigField("String", "WAKE_URL", "\"$wakeUrl\"")
     }
 
     signingConfigs {

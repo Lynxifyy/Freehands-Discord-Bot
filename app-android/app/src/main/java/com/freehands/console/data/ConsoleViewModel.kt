@@ -24,6 +24,10 @@ data class UiState(
     /** Full record of that account, when the bot reports one. */
     val account: Account? = null,
     val running: Boolean = false,
+    /** Real state behind `running`, so "cannot reach" is never shown as "off". */
+    val power: PowerStatus = PowerStatus.Unreachable,
+    /** True while the app is asking the wake door to start the supervisor. */
+    val waking: Boolean = false,
     val botName: String = "",
     val settings: Map<String, Any> = emptyMap(),
     val counts: Map<String, Int> = emptyMap(),
@@ -284,25 +288,50 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             while (true) {
                 try {
-                    val running = api.powerState()
-                    if (running) {
-                        val st = api.status()
-                        val rows = api.log()
-                        val cmds = if (_state.value.commands.isEmpty()) api.commands() else _state.value.commands
-                        st.account?.let { cacheAccount(it) }
-                        _state.value = _state.value.copy(
-                            running = true, botName = st.botName, settings = st.settings,
-                            counts = st.counts, rows = rows, commands = cmds,
-                            account = st.account ?: _state.value.account,
-                            identity = st.account?.label ?: _state.value.identity,
-                            error = null, live = true,
-                        )
-                    } else {
-                        _state.value = _state.value.copy(running = false, live = false)
+                    val status = api.powerStatus()
+                    when (status) {
+                        PowerStatus.Online, PowerStatus.Unresponsive -> {
+                            val st = api.status()
+                            val rows = api.log()
+                            val cmds = if (_state.value.commands.isEmpty()) api.commands() else _state.value.commands
+                            st.account?.let { cacheAccount(it) }
+                            _state.value = _state.value.copy(
+                                running = true, power = status, botName = st.botName,
+                                settings = st.settings, counts = st.counts, rows = rows,
+                                commands = cmds, account = st.account ?: _state.value.account,
+                                identity = st.account?.label ?: _state.value.identity,
+                                error = null, live = true, waking = false,
+                            )
+                        }
+                        PowerStatus.Stopped -> {
+                            _state.value = _state.value.copy(
+                                running = false, power = status, live = false, waking = false,
+                            )
+                        }
+                        PowerStatus.Unauthorized -> {
+                            // The server is up; this device's token is not.
+                            // Pairing again is the fix, not pressing Start.
+                            _state.value = _state.value.copy(
+                                running = false, power = status, live = false, waking = false,
+                                error = "This device needs to pair again",
+                            )
+                        }
+                        PowerStatus.Unreachable -> {
+                            // Nothing is listening, so no button press can land
+                            // either. Ask the wake door to bring the supervisor
+                            // back, then let the next poll read the real state.
+                            _state.value = _state.value.copy(
+                                running = false, power = status, live = false,
+                                waking = true,
+                            )
+                            api.wake()
+                            _state.value = _state.value.copy(waking = false)
+                            delay(1500)
+                        }
                     }
                 } catch (e: Exception) {
                     _state.value = _state.value.copy(
-                        running = false, live = false,
+                        running = false, power = PowerStatus.Unreachable, live = false,
                         error = e.message ?: "connection failed",
                     )
                 }
@@ -314,10 +343,28 @@ class ConsoleViewModel(app: Application) : AndroidViewModel(app) {
     fun togglePower() {
         viewModelScope.launch {
             _state.value = _state.value.copy(busy = true)
+            // When nothing is listening, the Start request would fail at the
+            // socket. Wake the supervisor first, then press the button that
+            // now has somewhere to arrive.
+            if (_state.value.power == PowerStatus.Unreachable) {
+                _state.value = _state.value.copy(waking = true)
+                api.wake()
+                _state.value = _state.value.copy(waking = false)
+            }
             val action = if (_state.value.running) "stop" else "start"
             api.power(action)
             delay(2500)
             _state.value = _state.value.copy(busy = false)
+        }
+    }
+
+    /** Manual retry for when the automatic wake did not take. */
+    fun wakeNow() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(waking = true)
+            api.wake()
+            delay(1200)
+            _state.value = _state.value.copy(waking = false)
         }
     }
 

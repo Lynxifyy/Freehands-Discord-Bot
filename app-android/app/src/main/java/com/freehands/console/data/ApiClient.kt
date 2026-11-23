@@ -76,6 +76,51 @@ data class Power(
     val on: Boolean,
 )
 
+/**
+ * The bot's actual state, kept distinct so the UI never calls an unreachable
+ * bot "offline" and offers a Start button that cannot possibly help.
+ */
+enum class PowerStatus {
+    /** Process alive and answering its own API. */
+    Online,
+
+    /** Process alive but not answering — Start will kill and restart it. */
+    Unresponsive,
+
+    /** The supervisor answered and said the bot is not running. */
+    Stopped,
+
+    /** We could not reach the supervisor at all. */
+    Unreachable,
+
+    /** The server answered but refused this device's token. */
+    Unauthorized,
+}
+
+/**
+ * Reads `/api/power` into a [PowerStatus].
+ *
+ * `healthy` is what matters, not `running`: a process can exist while wedged,
+ * and a wedged bot still needs Start. The server sends `healthy` when it can;
+ * `running` alone means alive-but-unverified.
+ */
+internal fun parsePowerStatus(o: JSONObject): PowerStatus = when {
+    o.optBoolean("healthy", false) -> PowerStatus.Online
+    o.optBoolean("running", false) -> PowerStatus.Unresponsive
+    else -> PowerStatus.Stopped
+}
+
+/**
+ * Turns a failed `/api/power` call into the right state.
+ *
+ * A refused token is not the same failure as a host that will not answer: the
+ * server is healthy and the phone needs to pair again. Both used to arrive at
+ * the UI as "offline", so neither told the user what to do.
+ */
+internal fun classifyPowerFailure(e: Throwable): PowerStatus =
+    if (e.message?.startsWith("HTTP 401") == true) PowerStatus.Unauthorized
+    else PowerStatus.Unreachable
+
 data class CommandInfo(
     val name: String,
     val usage: String,
@@ -172,9 +217,24 @@ data class Creator(
  */
 object Endpoint {
     val DEFAULT_BASE: String = BuildConfig.BASE_URL
+
+    /**
+     * Where to knock when the supervisor is dead.
+     *
+     * The main host stops answering when the supervisor is gone, so waking it
+     * has to go somewhere else. `BuildConfig.WAKE_URL` is the second host; the
+     * default swaps the port so a self-hosted build still works without it.
+     */
+    val DEFAULT_WAKE: String = BuildConfig.WAKE_URL.ifBlank {
+        DEFAULT_BASE.replace(":12000", ":12001")
+    }
 }
 
-class ApiClient(var baseUrl: String, var token: String) {
+class ApiClient(
+    var baseUrl: String,
+    var token: String,
+    var wakeUrl: String = Endpoint.DEFAULT_WAKE,
+) {
 
     private fun conn(path: String, method: String, body: String?): HttpURLConnection {
         val url = URL(baseUrl.trimEnd('/') + path)
@@ -368,10 +428,42 @@ class ApiClient(var baseUrl: String, var token: String) {
         runCatching { read(conn("/api/power", "POST", body)) }.isSuccess
     }
 
-    suspend fun powerState(): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * What the bot is doing, as distinct states rather than a boolean.
+     *
+     * `powerState()` used to collapse every failure — a 401, a timeout, a host
+     * that no longer exists — into `false`, which the UI rendered as "Bot is
+     * offline". A bot that was running fine therefore looked stopped whenever
+     * the phone could not reach it, and the only button on offer was Start.
+     */
+    suspend fun powerStatus(): PowerStatus = withContext(Dispatchers.IO) {
+        try {
+            parsePowerStatus(JSONObject(read(conn("/api/power", "GET", null))))
+        } catch (e: Exception) {
+            classifyPowerFailure(e)
+        }
+    }
+
+    /**
+     * Ask the wake door to start the supervisor, for when nothing is listening
+     * on the main port at all.
+     *
+     * This talks to a different host on purpose. When the supervisor is dead
+     * its port is closed, so no request to it can arrive; the waker is the only
+     * thing still answering, and all it can do is start the supervisor.
+     */
+    suspend fun wake(): Boolean = withContext(Dispatchers.IO) {
         runCatching {
-            val o = JSONObject(read(conn("/api/power", "GET", null)))
-            o.optBoolean("running", false)
+            val c = URL(wakeUrl.trimEnd('/') + "/wake").openConnection() as HttpURLConnection
+            c.requestMethod = "POST"
+            c.connectTimeout = 6000
+            // The waker waits for the supervisor to bind before replying.
+            c.readTimeout = 25000
+            c.doOutput = true
+            c.setRequestProperty("Content-Type", "application/json")
+            c.outputStream.use { it.write("{}".toByteArray()) }
+            val o = JSONObject(read(c))
+            o.optBoolean("ok", false)
         }.getOrDefault(false)
     }
 

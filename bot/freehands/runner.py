@@ -9,6 +9,7 @@ from .codebook import Codebook
 from .config import GUILD_ID, MAIN_CHAT_ID, env_flag
 from .console import BotApi
 from .engine import Engine
+from . import keeper
 from .gateway import Gateway
 from .log import log, stats
 from .rest import Rest, RestError
@@ -93,6 +94,12 @@ def run() -> None:
     # live objects instead of being overwritten by the next state save.
     api = BotApi(engine)
     api.start()
+
+    # The supervisor keeps this process alive; this keeps the supervisor alive.
+    # Without it, a dead supervisor meant a dead public port that no app could
+    # wake, because a request cannot reach a process that is not listening.
+    if env_flag("FH_KEEPER", True):
+        keeper.start()
 
     seen = {int(m["id"]) for m in rest.messages(MAIN_CHAT_ID, limit=25)}
     gateway = None

@@ -41,6 +41,10 @@ PIDFILE = BOT_DIR / "freehands.pid"
 # watchdog can tell "stopped on purpose" from "crashed".
 STOPPED_MARKER = BOT_DIR / "freehands.stopped"
 STATE = BOT_DIR / "state.json"
+# Where the supervisor records the port it actually bound. The bot reads this
+# instead of guessing from the environment: a bot started by hand has no
+# FH_CONSOLE_PORT, and guessing would point its keeper at the wrong port.
+PORTFILE = BOT_DIR / "console.port"
 BOT_API = "http://127.0.0.1:8791"
 # Serialises start/stop so the watchdog and a button press cannot both spawn a
 # bot. A re-entrant lock: `_restart` holds it across a stop and a start.
@@ -706,6 +710,16 @@ def main(serve: bool = True) -> int:
         print("No FH_CONSOLE_TOKEN set; only paired devices can connect.")
         print("Run +pair in Discord, then enter the code in the app.")
     port = int(os.environ.get("FH_CONSOLE_PORT", DEFAULT_PORT))
+    # Publish the bound port so the bot's keeper watches the right one without
+    # having to inherit our environment. Only a run that really serves publishes:
+    # tests call main(serve=False) with port 0 to bind an ephemeral port, and
+    # writing that here poisoned the file for every real process afterwards.
+    if serve and port > 0:
+        try:
+            PORTFILE.parent.mkdir(parents=True, exist_ok=True)
+            PORTFILE.write_text(str(port))
+        except OSError as exc:
+            print(f"could not write {PORTFILE}: {exc}")
     # The bot has to be running before anyone can pair, because the pairing
     # code is issued by a Discord command. Starting it here means a fresh
     # machine reaches a usable state with no manual step.

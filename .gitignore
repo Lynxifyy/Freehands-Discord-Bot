@@ -4,6 +4,12 @@ bot/state.json.*
 bot/freehands.log
 bot/freehands.out
 bot/freehands.pid
+bot/freehands.stopped
+# The supervisor publishes its bound port here; it is machine state, not source.
+bot/console.port
+# Logs can carry message text and tokens echoed from config.
+bot/console.log
+bot/waker.log
 bot/.token
 bot/token
 .openhands/

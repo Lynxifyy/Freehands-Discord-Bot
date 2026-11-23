@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freehands.console.data.LogRow
+import com.freehands.console.data.PowerStatus
 import com.freehands.console.data.SelfTest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -95,6 +96,9 @@ fun LogTab(
     busy: Boolean,
     counts: Map<String, Int>,
     onTogglePower: () -> Unit,
+    power: PowerStatus = PowerStatus.Stopped,
+    waking: Boolean = false,
+    onWake: () -> Unit = {},
     onTest: () -> Unit = {},
     testing: Boolean = false,
     test: SelfTest? = null,
@@ -104,7 +108,13 @@ fun LogTab(
     Column(Modifier.fillMaxSize().padding(horizontal = 14.dp)) {
 
         // -- power ----------------------------------------------------------
-        SurfaceCard(accent = if (running) Good else Danger) {
+        val unreachable = power == PowerStatus.Unreachable
+        val accent = when {
+            running -> Good
+            unreachable -> Warn
+            else -> Danger
+        }
+        SurfaceCard(accent = accent) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // A live pulse next to the state word: the cheapest way to
@@ -113,31 +123,43 @@ fun LogTab(
                         Modifier
                             .size(38.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                (if (running) Good else Danger).copy(alpha = 0.14f)
-                            ),
+                            .background(accent.copy(alpha = 0.14f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             if (running) "\u25B6" else "\u25A0",
-                            color = if (running) Good else Danger, fontSize = 15.sp,
+                            color = accent, fontSize = 15.sp,
                         )
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            if (running) "Bot is online" else "Bot is offline",
+                            when (power) {
+                                PowerStatus.Online -> "Bot is online"
+                                PowerStatus.Unresponsive -> "Bot is not responding"
+                                PowerStatus.Stopped -> "Bot is offline"
+                                PowerStatus.Unreachable -> "Console unreachable"
+                                PowerStatus.Unauthorized -> "Device not authorized"
+                            },
                             color = Color.White, fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                         )
                         Spacer(Modifier.height(3.dp))
                         Text(
-                            if (running) {
-                                "${counts["message"] ?: 0} messages  ·  " +
-                                    "${counts["delete"] ?: 0} deletes  ·  " +
-                                    "${counts["edit"] ?: 0} edits"
-                            } else {
-                                "Tap start to bring the console online"
+                            when (power) {
+                                PowerStatus.Online ->
+                                    "${counts["message"] ?: 0} messages  ·  " +
+                                        "${counts["delete"] ?: 0} deletes  ·  " +
+                                        "${counts["edit"] ?: 0} edits"
+                                PowerStatus.Unresponsive ->
+                                    "Alive but silent. Tap Start to restart it."
+                                PowerStatus.Stopped ->
+                                    "Tap start to bring the console online"
+                                PowerStatus.Unreachable ->
+                                    if (waking) "Waking the supervisor\u2026"
+                                    else "Server is down. Tap Wake to start it."
+                                PowerStatus.Unauthorized ->
+                                    "Pair this device again from Discord"
                             },
                             color = Muted, fontSize = 10.sp,
                         )
@@ -146,24 +168,48 @@ fun LogTab(
                 }
                 Spacer(Modifier.height(14.dp))
                 Row(Modifier.fillMaxWidth()) {
-                    Button(
-                        onClick = onTogglePower,
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f).height(44.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (running) Danger else Brand,
-                        ),
-                    ) {
-                        if (busy) {
-                            CircularProgressIndicator(
-                                Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Text(
-                                if (running) "Stop" else "Start",
-                                color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp,
-                            )
+                    if (unreachable) {
+                        // Start cannot work here: there is no listener to
+                        // receive it. Wake first, which starts the supervisor
+                        // on another host.
+                        Button(
+                            onClick = onWake,
+                            enabled = !waking,
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Warn),
+                        ) {
+                            if (waking) {
+                                CircularProgressIndicator(
+                                    Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Text(
+                                    "Wake", color = Color.White,
+                                    fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                                )
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = onTogglePower,
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (running) Danger else Brand,
+                            ),
+                        ) {
+                            if (busy) {
+                                CircularProgressIndicator(
+                                    Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Text(
+                                    if (running) "Stop" else "Start",
+                                    color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.width(10.dp))
